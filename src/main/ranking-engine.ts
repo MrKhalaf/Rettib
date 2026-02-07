@@ -8,9 +8,9 @@ function safeCadence(cadence: number): number {
 export function calculateWorkstreamScore(workstream: Workstream, now = Date.now()): WorkstreamScore {
   const priorityScore = workstream.priority * 20
 
-  const daysSinceProgress = workstream.last_progress_at
-    ? (now - workstream.last_progress_at) / 86_400_000
-    : 999
+  const stalenessBasis: WorkstreamScore['staleness_basis'] = workstream.last_progress_at ? 'progress' : 'created'
+  const stalenessReferenceAt = workstream.last_progress_at ?? workstream.created_at
+  const daysSinceProgress = Math.max(0, (now - stalenessReferenceAt) / 86_400_000)
 
   const stalenessRatio = daysSinceProgress / safeCadence(workstream.target_cadence_days)
   const stalenessScore = Math.min(stalenessRatio, 3) * 30
@@ -22,12 +22,16 @@ export function calculateWorkstreamScore(workstream: Workstream, now = Date.now(
     staleness_score: Number(stalenessScore.toFixed(2)),
     blocked_penalty: blockedPenalty,
     total_score: Number((priorityScore + stalenessScore + blockedPenalty).toFixed(2)),
-    days_since_progress: Number(daysSinceProgress.toFixed(2))
+    days_since_progress: Number(daysSinceProgress.toFixed(2)),
+    staleness_basis: stalenessBasis
   }
 }
 
 export function getRankingExplanation(score: WorkstreamScore): string {
-  const staleText = score.days_since_progress >= 999 ? 'never updated' : `${score.days_since_progress}d since progress`
+  const staleText =
+    score.staleness_basis === 'created'
+      ? `not started (${score.days_since_progress}d since created)`
+      : `${score.days_since_progress}d since progress`
   const penaltyText = score.blocked_penalty === 0 ? '' : `, blocked ${score.blocked_penalty}`
   return `priority ${score.priority_score} + staleness ${score.staleness_score} (${staleText}${penaltyText})`
 }

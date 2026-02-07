@@ -104,6 +104,7 @@ export interface WorkstreamScore {
   blocked_penalty: number
   total_score: number
   days_since_progress: number
+  staleness_basis: 'progress' | 'created'
 }
 
 export interface WorkstreamWithScore extends Workstream {
@@ -143,6 +144,7 @@ export interface ElectronApi {
     list: (workstreamId: number) => Promise<Task[]>
     create: (workstreamId: number, title: string) => Promise<Task>
     update: (id: number, data: UpdateTaskInput) => Promise<void>
+    delete: (id: number) => Promise<void>
   }
   chat: {
     listConversations: () => Promise<ClaudeConversation[]>

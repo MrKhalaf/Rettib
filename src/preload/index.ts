@@ -16,7 +16,8 @@ const api: ElectronApi = {
   tasks: {
     list: (workstreamId) => ipcRenderer.invoke('tasks:list', workstreamId),
     create: (workstreamId, title) => ipcRenderer.invoke('tasks:create', workstreamId, title),
-    update: (id, data) => ipcRenderer.invoke('tasks:update', id, data)
+    update: (id, data) => ipcRenderer.invoke('tasks:update', id, data),
+    delete: (id) => ipcRenderer.invoke('tasks:delete', id)
   },
   chat: {
     listConversations: () => ipcRenderer.invoke('chat:list-conversations'),

@@ -566,12 +566,19 @@ export function listProgress(workstreamId: number, db = getDatabase()): Progress
 }
 
 export function listTasks(workstreamId: number, db = getDatabase()): Task[] {
+  db.prepare(
+    `
+    DELETE FROM tasks
+    WHERE workstream_id = ? AND status = 'done'
+    `
+  ).run(workstreamId)
+
   return db
     .prepare(
       `
       SELECT id, workstream_id, title, status, position, created_at, updated_at
       FROM tasks
-      WHERE workstream_id = ?
+      WHERE workstream_id = ? AND status != 'done'
       ORDER BY position ASC, created_at ASC
       `
     )
@@ -601,6 +608,11 @@ export function createTask(data: CreateTaskInput, db = getDatabase()): Task {
 }
 
 export function updateTask(id: number, data: UpdateTaskInput, db = getDatabase()): void {
+  if (data.status === 'done') {
+    deleteTask(id, db)
+    return
+  }
+
   const updates: string[] = []
   const values: Array<number | string> = []
 
@@ -628,6 +640,15 @@ export function updateTask(id: number, data: UpdateTaskInput, db = getDatabase()
   values.push(id)
 
   db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+}
+
+export function deleteTask(id: number, db = getDatabase()): void {
+  db.prepare(
+    `
+    DELETE FROM tasks
+    WHERE id = ?
+    `
+  ).run(id)
 }
 
 export function listChatReferences(workstreamId: number, db = getDatabase()): ChatReference[] {
@@ -736,7 +757,8 @@ export function listWorkstreamsWithLatestChat(db = getDatabase()): WorkstreamLis
       staleness_score: 0,
       blocked_penalty: 0,
       total_score: 0,
-      days_since_progress: 0
+      days_since_progress: 0,
+      staleness_basis: 'progress'
     },
     ranking_explanation: '',
     last_chat: getLatestChatReference(workstream.id, db)

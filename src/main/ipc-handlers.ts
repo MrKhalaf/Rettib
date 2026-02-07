@@ -7,6 +7,7 @@ import {
   createSyncRun,
   createTask,
   createWorkstream,
+  deleteTask,
   getDatabase,
   getOrCreateClaudeSyncSource,
   getWorkstream,
@@ -115,6 +116,11 @@ export function registerIpcHandlers(): void {
     const taskId = ensureNumber(id, 'task id')
     const payload = data as UpdateTaskInput
     updateTask(taskId, payload, getDatabase())
+  })
+
+  ipcMain.handle('tasks:delete', async (_event, id: unknown) => {
+    const taskId = ensureNumber(id, 'task id')
+    deleteTask(taskId, getDatabase())
   })
 
   ipcMain.handle('chat:list-conversations', async () => {
