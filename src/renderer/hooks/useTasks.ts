@@ -35,3 +35,15 @@ export function useUpdateTask(workstreamId: number) {
     }
   })
 }
+
+export function useDeleteTask(workstreamId: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: number) => tasksApi.delete(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['tasks', workstreamId] })
+      void queryClient.invalidateQueries({ queryKey: ['workstream', workstreamId] })
+    }
+  })
+}
