@@ -1,0 +1,20 @@
+export type {
+  ChatReference,
+  ClaudeConversation,
+  CreateTaskInput,
+  CreateWorkstreamInput,
+  ProgressUpdate,
+  SyncDiagnostics,
+  SyncRun,
+  SyncSource,
+  Task,
+  TaskStatus,
+  UpdateTaskInput,
+  UpdateWorkstreamInput,
+  Workstream,
+  WorkstreamDetail,
+  WorkstreamListItem,
+  WorkstreamScore,
+  WorkstreamStatus,
+  WorkstreamWithScore
+} from '../../shared/types'

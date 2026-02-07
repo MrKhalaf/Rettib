@@ -1,0 +1,13 @@
+appId: com.rettib.desktop
+productName: Rettib
+icon: build/icon.icns
+files:
+  - dist/**
+  - dist-electron/**
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.icns
+  target:
+    - dmg
+directories:
+  output: release
