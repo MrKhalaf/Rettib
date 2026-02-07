@@ -1,6 +1,6 @@
 import type { WorkstreamListItem } from '../../shared/types'
-import { formatRelativeTime } from '../utils/time'
-import { RankingExplainer } from './RankingExplainer'
+import { ScoreTooltip } from './ScoreTooltip'
+import { StalenessIndicator } from './StalenessIndicator'
 import { StatusBadge } from './StatusBadge'
 
 interface Props {
@@ -10,44 +10,83 @@ interface Props {
   onClick: () => void
 }
 
+function formatScore(score: number) {
+  return Number.isInteger(score) ? String(score) : score.toFixed(1)
+}
+
+function buildStalenessText(workstream: WorkstreamListItem): string {
+  const days = `${Math.round(workstream.score.days_since_progress)}d`
+  return workstream.score.staleness_basis === 'created' ? `Not started (${days} since created)` : `${days} since progress`
+}
+
+function getRankingReasons(workstream: WorkstreamListItem): { primary: string; secondary: string[] } {
+  const reasons: string[] = []
+  const stalenessText = buildStalenessText(workstream)
+
+  if (workstream.score.staleness_ratio >= 1) {
+    reasons.push(`Overdue (${stalenessText})`)
+  } else if (workstream.score.staleness_ratio >= 0.5) {
+    reasons.push(`Approaching cadence (${stalenessText})`)
+  } else if (workstream.score.staleness_basis === 'created') {
+    reasons.push(`Recently created (${Math.round(workstream.score.days_since_progress)}d)`)
+  }
+
+  if (workstream.score.priority_score >= 4) {
+    reasons.push(`High priority (${workstream.score.priority_score})`)
+  }
+
+  if (workstream.score.blocked_penalty < 0) {
+    reasons.push(`Blocked penalty (${workstream.score.blocked_penalty})`)
+  }
+
+  if (workstream.next_action) {
+    reasons.push('Action-ready next step')
+  }
+
+  if (reasons.length === 0) {
+    reasons.push('Composite score keeps this in focus')
+  }
+
+  return {
+    primary: reasons[0],
+    secondary: reasons.slice(1, 3)
+  }
+}
+
 export function WorkstreamCard({ workstream, rank, selected, onClick }: Props) {
+  const lastChatTitle = workstream.last_chat?.conversation_title ?? workstream.last_chat?.conversation_uuid ?? 'No linked chat yet'
+  const rankingReasons = getRankingReasons(workstream)
+
   return (
     <button className={`workstream-card ${selected ? 'selected' : ''}`} onClick={onClick} type="button">
       <div className="workstream-card-header">
         <div className="rank">#{rank}</div>
-        <div className="workstream-title-wrap">
-          <h3>{workstream.name}</h3>
-          <StatusBadge status={workstream.status} />
-        </div>
-        <div className="score-pill">{workstream.score.total_score}</div>
+        <h3 className="workstream-name truncate-one-line" title={workstream.name}>
+          {workstream.name}
+        </h3>
+        <StatusBadge status={workstream.status} />
+        <StalenessIndicator
+          stalenessRatio={workstream.score.staleness_ratio}
+          daysSinceProgress={workstream.score.days_since_progress}
+          stalenessBasis={workstream.score.staleness_basis}
+        />
+        <ScoreTooltip
+          score={workstream.score}
+          rankingExplanation={workstream.ranking_explanation}
+          primaryReason={rankingReasons.primary}
+          secondaryReasons={rankingReasons.secondary}
+        >
+          <span className="score-pill">{formatScore(workstream.score.total_score)}</span>
+        </ScoreTooltip>
       </div>
 
-      <p className="ranking-why">{workstream.ranking_explanation}</p>
-      <RankingExplainer score={workstream.score} />
-
-      <div className="workstream-meta">
-        <span>Cadence: every {workstream.target_cadence_days}d</span>
-        <span>Last progress: {formatRelativeTime(workstream.last_progress_at)}</span>
+      <div className="workstream-line next-action-line" title={workstream.next_action ?? 'No next action set'}>
+        <span className="truncate-one-line">{workstream.next_action ?? 'No next action set'}</span>
       </div>
 
-      {workstream.next_action && (
-        <div className="next-action">
-          <span className="next-action-label">Next Action</span>
-          <span>{workstream.next_action}</span>
-        </div>
-      )}
-
-      {workstream.last_chat && (
-        <div className="last-chat">
-          <span className="last-chat-label">Last Claude chat</span>
-          <span className="last-chat-title">
-            {workstream.last_chat.conversation_title ?? workstream.last_chat.conversation_uuid}
-          </span>
-          {workstream.last_chat.last_user_message && (
-            <span className="last-chat-message">{workstream.last_chat.last_user_message}</span>
-          )}
-        </div>
-      )}
+      <div className={`workstream-line last-chat-line ${workstream.last_chat ? '' : 'empty-line'}`} title={lastChatTitle}>
+        <span className="truncate-one-line">{lastChatTitle}</span>
+      </div>
     </button>
   )
 }
