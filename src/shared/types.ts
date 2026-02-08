@@ -158,4 +158,7 @@ export interface ElectronApi {
     updateSourcePath: (path: string) => Promise<SyncSource>
     diagnostics: () => Promise<SyncDiagnostics>
   }
+  app: {
+    openObsidianNote: (noteRef: string) => Promise<{ ok: boolean; path?: string; error?: string }>
+  }
 }

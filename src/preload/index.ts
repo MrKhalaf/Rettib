@@ -30,6 +30,9 @@ const api: ElectronApi = {
     getOrCreateSource: () => ipcRenderer.invoke('sync:get-or-create-source'),
     updateSourcePath: (sourcePath) => ipcRenderer.invoke('sync:update-source-path', sourcePath),
     diagnostics: () => ipcRenderer.invoke('sync:diagnostics')
+  },
+  app: {
+    openObsidianNote: (noteRef) => ipcRenderer.invoke('app:open-obsidian-note', noteRef)
   }
 }
 

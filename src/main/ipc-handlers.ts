@@ -1,4 +1,8 @@
-import { ipcMain } from 'electron'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+import { ipcMain, shell } from 'electron'
 
 import type { CreateWorkstreamInput, UpdateTaskInput, UpdateWorkstreamInput } from '../shared/types'
 import { ClaudeConnector } from './claude-connector'
@@ -54,6 +58,51 @@ function makeConnectorFromSource(): ClaudeConnector {
   const source = getOrCreateClaudeSyncSource(db)
   const configuredPath = parseClaudePathFromSourceConfig(source.config)
   return new ClaudeConnector(configuredPath ?? undefined)
+}
+
+function resolveObsidianNotePath(noteRef: string): string | null {
+  const trimmed = noteRef.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const normalized = trimmed.replace(/\\/g, '/').replace(/\.md$/i, '')
+  const fileName = `${normalized}.md`
+
+  if (path.isAbsolute(fileName) && fs.existsSync(fileName)) {
+    return fileName
+  }
+
+  const iCloudObsidianRoot = path.join(
+    os.homedir(),
+    'Library',
+    'Mobile Documents',
+    'iCloud~md~obsidian',
+    'Documents'
+  )
+
+  if (!fs.existsSync(iCloudObsidianRoot)) {
+    return null
+  }
+
+  const directCandidate = path.join(iCloudObsidianRoot, fileName)
+  if (fs.existsSync(directCandidate)) {
+    return directCandidate
+  }
+
+  const vaultDirs = fs
+    .readdirSync(iCloudObsidianRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(iCloudObsidianRoot, entry.name))
+
+  for (const vaultDir of vaultDirs) {
+    const candidate = path.join(vaultDir, fileName)
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return null
 }
 
 export function registerIpcHandlers(): void {
@@ -211,5 +260,25 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('workstreams:exists', async (_event, id: unknown) => {
     const workstreamId = ensureNumber(id, 'workstream id')
     return getWorkstream(getDatabase(), workstreamId) !== null
+  })
+
+  ipcMain.handle('app:open-obsidian-note', async (_event, noteRef: unknown) => {
+    const target = ensureString(noteRef, 'note ref')
+    const notePath = resolveObsidianNotePath(target)
+    if (!notePath) {
+      return { ok: false, error: `Could not find Obsidian note for [[${target}]]` }
+    }
+
+    const obsidianUrl = `obsidian://open?path=${encodeURIComponent(notePath)}`
+    try {
+      await shell.openExternal(obsidianUrl)
+      return { ok: true, path: notePath }
+    } catch {
+      const fallbackError = await shell.openPath(notePath)
+      if (fallbackError) {
+        return { ok: false, error: fallbackError, path: notePath }
+      }
+      return { ok: true, path: notePath }
+    }
   })
 }
