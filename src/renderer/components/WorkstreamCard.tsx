@@ -1,6 +1,5 @@
 import type { WorkstreamListItem } from '../../shared/types'
 import { ScoreTooltip } from './ScoreTooltip'
-import { StalenessIndicator } from './StalenessIndicator'
 import { StatusBadge } from './StatusBadge'
 
 interface Props {
@@ -11,7 +10,7 @@ interface Props {
 }
 
 function formatScore(score: number) {
-  return Number.isInteger(score) ? String(score) : score.toFixed(1)
+  return String(Math.round(score))
 }
 
 function buildStalenessText(workstream: WorkstreamListItem): string {
@@ -65,14 +64,8 @@ export function WorkstreamCard({ workstream, rank, selected, onClick }: Props) {
           {workstream.name}
         </h3>
         <StatusBadge status={workstream.status} />
-        <StalenessIndicator
-          stalenessRatio={workstream.score.staleness_ratio}
-          daysSinceProgress={workstream.score.days_since_progress}
-          stalenessBasis={workstream.score.staleness_basis}
-        />
         <ScoreTooltip
           score={workstream.score}
-          rankingExplanation={workstream.ranking_explanation}
           primaryReason={rankingReasons.primary}
           secondaryReasons={rankingReasons.secondary}
         >
