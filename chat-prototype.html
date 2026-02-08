@@ -1,0 +1,1638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rettib — Claude Chat Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Berkeley+Mono:wght@400;500;600&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-deep: #0c0c0e;
+  --bg-surface: #141416;
+  --bg-raised: #1a1a1e;
+  --bg-hover: #222228;
+  --bg-active: #2a2a32;
+  --border: #2a2a30;
+  --border-subtle: #1e1e24;
+  --text-primary: #e8e6e3;
+  --text-secondary: #8a8a8e;
+  --text-tertiary: #5a5a60;
+  --accent: #c9a04e;
+  --accent-dim: #8a7035;
+  --accent-glow: rgba(201, 160, 78, 0.08);
+  --user-bg: #1a1d2e;
+  --user-border: #2a2d42;
+  --assistant-bg: #161618;
+  --tool-bg: #18191e;
+  --tool-border: #2d2e36;
+  --tool-text: #7b8794;
+  --success: #4a9e6e;
+  --error: #c45454;
+  --code-bg: #0e0e10;
+  --scrollbar: #2a2a30;
+  --scrollbar-hover: #3a3a42;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --font-sans: 'DM Sans', -apple-system, sans-serif;
+  --font-mono: 'Berkeley Mono', 'SF Mono', 'Fira Code', monospace;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.5);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ─── Layout Shell ─── */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: 240px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  padding: 20px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.sidebar-brand svg {
+  width: 22px;
+  height: 22px;
+  fill: var(--accent);
+}
+
+.sidebar-brand h1 {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+  text-transform: uppercase;
+}
+
+.sidebar-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  padding: 0 2px;
+}
+
+.workstream-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.workstream-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  margin-bottom: 2px;
+  position: relative;
+}
+
+.workstream-item:hover { background: var(--bg-hover); }
+.workstream-item.active {
+  background: var(--bg-active);
+}
+.workstream-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.ws-rank {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  min-width: 18px;
+  padding-top: 2px;
+}
+
+.ws-info { flex: 1; min-width: 0; }
+
+.ws-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ws-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ws-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.ws-dot.blocked { background: var(--error); }
+.ws-dot.waiting { background: var(--accent); }
+
+/* ─── Main Content ─── */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ─── Detail Header ─── */
+.detail-header {
+  padding: 16px 24px 0;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.detail-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.status-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 20px;
+  text-transform: uppercase;
+}
+
+.status-pill.active {
+  background: rgba(74, 158, 110, 0.12);
+  color: var(--success);
+  border: 1px solid rgba(74, 158, 110, 0.25);
+}
+
+.detail-tabs {
+  display: flex;
+  gap: 0;
+}
+
+.detail-tab {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  padding: 8px 16px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+  user-select: none;
+}
+
+.detail-tab:hover { color: var(--text-secondary); }
+
+.detail-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ─── Chat Panel ─── */
+.chat-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-deep);
+}
+
+/* Session tabs */
+.session-bar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 6px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.session-bar::-webkit-scrollbar { height: 0; }
+
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+  user-select: none;
+  position: relative;
+}
+
+.session-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.session-tab.active {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.session-tab .tab-icon {
+  font-size: 11px;
+  opacity: 0.5;
+}
+
+.session-tab .tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition: all 0.1s;
+  cursor: pointer;
+}
+
+.session-tab:hover .tab-close,
+.session-tab.active .tab-close { opacity: 1; }
+.session-tab .tab-close:hover {
+  background: rgba(196, 84, 84, 0.2);
+  color: var(--error);
+}
+
+.session-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+  color: var(--text-tertiary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.session-new:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.session-id {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding-left: 16px;
+  flex-shrink: 0;
+}
+
+/* ─── Messages ─── */
+.messages-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+}
+
+.messages-scroll::-webkit-scrollbar { width: 6px; }
+.messages-scroll::-webkit-scrollbar-track { background: transparent; }
+.messages-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 3px;
+}
+.messages-scroll::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+
+.messages-container {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 24px 24px 16px;
+}
+
+.message-group {
+  margin-bottom: 20px;
+  animation: messageIn 0.3s ease-out;
+}
+
+@keyframes messageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* User message */
+.message-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.message-user .message-bubble {
+  max-width: 75%;
+  background: var(--user-bg);
+  border: 1px solid var(--user-border);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+/* Assistant message */
+.message-assistant {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.assistant-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent-dim), var(--accent));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.assistant-avatar svg {
+  width: 14px;
+  height: 14px;
+  fill: var(--bg-deep);
+}
+
+.message-assistant .message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-assistant .message-bubble {
+  background: var(--assistant-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm) var(--radius-lg) var(--radius-lg) var(--radius-lg);
+  padding: 14px 18px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+
+.message-assistant .message-bubble p { margin-bottom: 10px; }
+.message-assistant .message-bubble p:last-child { margin-bottom: 0; }
+
+.message-assistant .message-bubble strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.message-assistant .message-bubble code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  padding: 1.5px 6px;
+  border-radius: 4px;
+  color: var(--accent);
+}
+
+.message-assistant .message-bubble pre {
+  margin: 12px 0;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.message-assistant .message-bubble pre .code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.message-assistant .message-bubble pre code {
+  display: block;
+  padding: 12px 14px;
+  background: transparent;
+  border: none;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.message-assistant .message-bubble ul,
+.message-assistant .message-bubble ol {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.message-assistant .message-bubble li {
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+
+.message-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
+  padding-left: 2px;
+}
+
+/* ─── Tool Use ─── */
+.tool-use {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 7px 12px;
+  background: var(--tool-bg);
+  border: 1px solid var(--tool-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tool-text);
+  transition: background 0.15s;
+}
+
+.tool-use:hover { background: var(--bg-hover); }
+
+.tool-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.tool-icon.read { background: rgba(74, 158, 238, 0.12); color: #4a9eed; }
+.tool-icon.edit { background: rgba(201, 160, 78, 0.12); color: var(--accent); }
+.tool-icon.bash { background: rgba(74, 158, 110, 0.12); color: var(--success); }
+.tool-icon.grep { background: rgba(139, 92, 246, 0.12); color: #8b5cf6; }
+
+.tool-icon svg { width: 12px; height: 12px; }
+
+.tool-name { color: var(--text-secondary); font-weight: 500; }
+.tool-target { color: var(--text-tertiary); }
+
+.tool-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tool-status .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.tool-status span {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* ─── Streaming ─── */
+.streaming-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.streaming-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.streaming-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: dotPulse 1.4s ease-in-out infinite;
+}
+
+.streaming-dots span:nth-child(2) { animation-delay: 0.2s; }
+.streaming-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dotPulse {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+.cursor-blink {
+  display: inline-block;
+  width: 2px;
+  height: 16px;
+  background: var(--accent);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* ─── Input Bar ─── */
+.input-bar {
+  padding: 12px 24px 16px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.input-wrapper {
+  max-width: 820px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input-wrapper:focus-within {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-sm);
+}
+
+.input-textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--text-primary);
+  padding: 10px 12px;
+  max-height: 140px;
+  line-height: 1.5;
+}
+
+.input-textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.input-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+}
+
+.input-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-attach {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.btn-attach:hover { color: var(--text-secondary); background: var(--bg-hover); }
+
+.btn-send {
+  width: 32px;
+  height: 32px;
+  background: var(--accent);
+  color: var(--bg-deep);
+}
+
+.btn-send:hover { background: #d4ac5a; }
+.btn-send:active { transform: scale(0.94); }
+.btn-send:disabled { opacity: 0.3; cursor: default; }
+
+.btn-send svg, .btn-attach svg {
+  width: 16px;
+  height: 16px;
+}
+
+.input-hint {
+  max-width: 820px;
+  margin: 6px auto 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.input-hint kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10px;
+  background: var(--bg-raised);
+}
+
+/* ─── Empty State ─── */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  opacity: 0.7;
+}
+
+.empty-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-icon svg {
+  width: 24px;
+  height: 24px;
+  stroke: var(--text-tertiary);
+  fill: none;
+  stroke-width: 1.5;
+}
+
+.empty-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.empty-subtitle {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  text-align: center;
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+/* ─── Scrollbar global ─── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+
+/* ─── Info Tab ─── */
+.info-panel {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-deep);
+  display: none;
+}
+
+.info-panel.visible { display: block; }
+.chat-panel.hidden { display: none; }
+
+.info-content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 24px;
+}
+
+.info-section {
+  margin-bottom: 24px;
+}
+
+.info-section-header {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Score card */
+.score-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.score-total {
+  text-align: center;
+  min-width: 72px;
+}
+
+.score-number {
+  font-family: var(--font-mono);
+  font-size: 36px;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.score-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+.score-breakdown {
+  flex: 1;
+  display: flex;
+  gap: 12px;
+}
+
+.score-component {
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  text-align: center;
+}
+
+.score-component-value {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.score-component-name {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.score-bar-track {
+  width: 100%;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.score-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+
+.score-bar-fill.priority { background: var(--accent); }
+.score-bar-fill.staleness { background: var(--error); }
+.score-bar-fill.blocked { background: var(--text-tertiary); }
+
+/* Next action card */
+.next-action-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--accent-dim);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+
+.next-action-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.next-action-source {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
+}
+
+/* Resume context */
+.resume-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+}
+
+.resume-chat-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resume-chat-preview {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.resume-chat-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.resume-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+  transition: opacity 0.15s;
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+}
+
+.resume-link-btn:hover { opacity: 0.75; }
+
+/* Settings row */
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.setting-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+
+.setting-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.setting-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.setting-unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  margin-left: 2px;
+}
+
+/* Notes list */
+.notes-list {
+  list-style: none;
+}
+
+.notes-list li {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  line-height: 1.5;
+}
+
+.notes-list li:last-child { border-bottom: none; }
+
+.note-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+  font-weight: 500;
+  border-bottom: 1px dashed var(--accent-dim);
+  transition: opacity 0.15s;
+}
+
+.note-link:hover { opacity: 0.7; }
+
+/* Progress timeline */
+.progress-list {
+  position: relative;
+  padding-left: 16px;
+}
+
+.progress-list::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--border);
+}
+
+.progress-item {
+  position: relative;
+  padding: 6px 0 14px 14px;
+}
+
+.progress-item::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 11px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  border: 1px solid var(--bg-deep);
+}
+
+.progress-item:first-child::before {
+  background: var(--accent);
+}
+
+.progress-note {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.progress-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 900px) {
+  .sidebar { width: 200px; }
+  .messages-container { padding: 16px; }
+}
+</style>
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <h1>Rettib</h1>
+      </div>
+      <div class="sidebar-label">Workstreams</div>
+    </div>
+
+    <div class="workstream-list">
+      <div class="workstream-item active">
+        <span class="ws-rank">1</span>
+        <div class="ws-info">
+          <div class="ws-name">CareQuotesAI</div>
+          <div class="ws-meta">
+            <span class="ws-dot"></span>
+            <span>P5</span>
+            <span>2d</span>
+            <span>active</span>
+          </div>
+        </div>
+      </div>
+      <div class="workstream-item">
+        <span class="ws-rank">2</span>
+        <div class="ws-info">
+          <div class="ws-name">Job Search</div>
+          <div class="ws-meta">
+            <span class="ws-dot"></span>
+            <span>P5</span>
+            <span>1d</span>
+            <span>active</span>
+          </div>
+        </div>
+      </div>
+      <div class="workstream-item">
+        <span class="ws-rank">3</span>
+        <div class="ws-info">
+          <div class="ws-name">DSPy Learning</div>
+          <div class="ws-meta">
+            <span class="ws-dot"></span>
+            <span>P4</span>
+            <span>3d</span>
+            <span>active</span>
+          </div>
+        </div>
+      </div>
+      <div class="workstream-item">
+        <span class="ws-rank">4</span>
+        <div class="ws-info">
+          <div class="ws-name">sandbox-security</div>
+          <div class="ws-meta">
+            <span class="ws-dot waiting"></span>
+            <span>P3</span>
+            <span>14d</span>
+            <span>waiting</span>
+          </div>
+        </div>
+      </div>
+      <div class="workstream-item">
+        <span class="ws-rank">5</span>
+        <div class="ws-info">
+          <div class="ws-name">Cipher</div>
+          <div class="ws-meta">
+            <span class="ws-dot waiting"></span>
+            <span>P2</span>
+            <span>30d</span>
+            <span>waiting</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <!-- Detail Header -->
+    <div class="detail-header">
+      <div class="detail-title-row">
+        <h2 class="detail-title">CareQuotesAI</h2>
+        <span class="status-pill active">active</span>
+      </div>
+      <div class="detail-tabs">
+        <div class="detail-tab active">Info</div>
+        <div class="detail-tab">Tasks</div>
+        <div class="detail-tab">Chat</div>
+        <div class="detail-tab">Progress</div>
+        <div class="detail-tab">Notes</div>
+      </div>
+    </div>
+
+    <!-- Info Panel -->
+    <div class="info-panel visible" id="infoPanel">
+      <div class="info-content">
+
+        <!-- Score -->
+        <div class="info-section">
+          <div class="info-section-header">Ranking Score</div>
+          <div class="score-card">
+            <div class="score-total">
+              <div class="score-number">162</div>
+              <div class="score-label">Total</div>
+            </div>
+            <div class="score-breakdown">
+              <div class="score-component">
+                <div class="score-component-value">100</div>
+                <div class="score-component-name">Priority</div>
+                <div class="score-bar-track"><div class="score-bar-fill priority" style="width:100%"></div></div>
+              </div>
+              <div class="score-component">
+                <div class="score-component-value">62</div>
+                <div class="score-component-name">Staleness</div>
+                <div class="score-bar-track"><div class="score-bar-fill staleness" style="width:68%"></div></div>
+              </div>
+              <div class="score-component">
+                <div class="score-component-value">0</div>
+                <div class="score-component-name">Blocked</div>
+                <div class="score-bar-track"><div class="score-bar-fill blocked" style="width:0%"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Next Action -->
+        <div class="info-section">
+          <div class="info-section-header">Next Action</div>
+          <div class="next-action-card">
+            <div class="next-action-text">Implement Patient search endpoint with NPPES provider filtering</div>
+            <div class="next-action-source">source: first active task</div>
+          </div>
+        </div>
+
+        <!-- Resume Context -->
+        <div class="info-section">
+          <div class="info-section-header">Resume Context</div>
+          <div class="resume-card">
+            <div class="resume-chat-title">FHIR setup</div>
+            <div class="resume-chat-preview">Now add the Patient search endpoint with NPI-based provider filtering from the NPPES data we already have.</div>
+            <div class="resume-chat-time">2 minutes ago</div>
+            <button class="resume-link-btn" onclick="switchToChat()">&#9654; Continue in Chat</button>
+          </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="info-section">
+          <div class="info-section-header">Settings</div>
+          <div class="settings-grid">
+            <div class="setting-card">
+              <div class="setting-label">Priority</div>
+              <div class="setting-value">5<span class="setting-unit">/ 5</span></div>
+            </div>
+            <div class="setting-card">
+              <div class="setting-label">Cadence</div>
+              <div class="setting-value">2<span class="setting-unit">days</span></div>
+            </div>
+            <div class="setting-card">
+              <div class="setting-label">Last Progress</div>
+              <div class="setting-value" style="font-size:16px;">4.1<span class="setting-unit">days ago</span></div>
+            </div>
+            <div class="setting-card">
+              <div class="setting-label">Staleness Ratio</div>
+              <div class="setting-value" style="color:var(--error);">2.1<span class="setting-unit">x</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Progress -->
+        <div class="info-section">
+          <div class="info-section-header">Recent Progress</div>
+          <div class="progress-list">
+            <div class="progress-item">
+              <div class="progress-note">Set up FHIR R4 CapabilityStatement and Patient resource config</div>
+              <div class="progress-time">4 days ago</div>
+            </div>
+            <div class="progress-item">
+              <div class="progress-note">Integrated NPPES GeoSearch module for provider lookup</div>
+              <div class="progress-time">6 days ago</div>
+            </div>
+            <div class="progress-item">
+              <div class="progress-note">Initial project scaffolding and database schema</div>
+              <div class="progress-time">9 days ago</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Notes -->
+        <div class="info-section">
+          <div class="info-section-header">Notes</div>
+          <ul class="notes-list">
+            <li>Repo: ~/Projects/CareQuotesAI</li>
+            <li>Vault: <span class="note-link">CareQuotes/Plan Doc</span></li>
+            <li>Sub-projects: NPPES-GeoSearch (provider search)</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Chat Panel -->
+    <div class="chat-panel hidden" id="chatPanel">
+      <!-- Session Tabs -->
+      <div class="session-bar">
+        <div class="session-tab active" data-session="fhir">
+          <span class="tab-icon">&#9679;</span>
+          FHIR setup
+          <span class="tab-close">&times;</span>
+        </div>
+        <div class="session-tab" data-session="auth">
+          <span class="tab-icon">&#9679;</span>
+          API auth flow
+          <span class="tab-close">&times;</span>
+        </div>
+        <div class="session-tab" data-session="deploy">
+          <span class="tab-icon">&#9679;</span>
+          Deploy debug
+          <span class="tab-close">&times;</span>
+        </div>
+        <div class="session-new" title="New topic">+</div>
+        <div class="session-id">session: 5b83-3de6</div>
+      </div>
+
+      <!-- Messages -->
+      <div class="messages-scroll" id="messagesScroll">
+        <div class="messages-container" id="messagesContainer">
+
+          <!-- User message -->
+          <div class="message-group message-user">
+            <div class="message-bubble">
+              How do I set up a FHIR R4 resource server for patient lookup in the CareQuotesAI project?
+            </div>
+          </div>
+
+          <!-- Assistant message with tool use -->
+          <div class="message-group message-assistant">
+            <div class="assistant-avatar">
+              <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            </div>
+            <div class="message-content">
+              <!-- Tool uses -->
+              <div class="tool-use">
+                <div class="tool-icon read">
+                  <svg viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v10H2z M4 5h8 M4 7h8 M4 9h6"/></svg>
+                </div>
+                <span class="tool-name">Read</span>
+                <span class="tool-target">src/fhir/server.ts</span>
+                <div class="tool-status">
+                  <div class="dot"></div>
+                  <span>done</span>
+                </div>
+              </div>
+
+              <div class="tool-use">
+                <div class="tool-icon grep">
+                  <svg viewBox="0 0 16 16"><path fill="currentColor" d="M11 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM10 10l4 4"/></svg>
+                </div>
+                <span class="tool-name">Grep</span>
+                <span class="tool-target">"CapabilityStatement" in src/</span>
+                <div class="tool-status">
+                  <div class="dot"></div>
+                  <span>3 matches</span>
+                </div>
+              </div>
+
+              <div class="message-bubble">
+                <p>I've looked at your project structure. For FHIR R4, you'll want to set up a <strong>CapabilityStatement</strong> resource first, then implement the Patient search endpoint. Here's the approach for your stack:</p>
+
+                <p><strong>1. Install the FHIR server package:</strong></p>
+
+                <pre>
+                  <div class="code-header"><span>bash</span></div>
+                  <code>npm install @asymmetrik/node-fhir-server-core</code>
+                </pre>
+
+                <p><strong>2. Configure the Patient search parameters:</strong></p>
+
+                <pre>
+                  <div class="code-header"><span>typescript</span></div>
+                  <code>import { initialize } from '@asymmetrik/node-fhir-server-core';
+
+const config = {
+  profiles: {
+    Patient: {
+      service: './patient.service.ts',
+      versions: ['4_0_0']
+    }
+  },
+  server: { port: 3001 }
+};
+
+const server = initialize(config);</code>
+                </pre>
+
+                <p>Your existing <code>src/fhir/server.ts</code> already has the Express setup. I'd recommend extending it with the FHIR service rather than creating a separate server.</p>
+              </div>
+
+              <div class="message-time">2 min ago</div>
+            </div>
+          </div>
+
+          <!-- User follow-up -->
+          <div class="message-group message-user">
+            <div class="message-bubble">
+              Now add the Patient search endpoint with NPI-based provider filtering from the NPPES data we already have.
+            </div>
+          </div>
+
+          <!-- Assistant streaming response -->
+          <div class="message-group message-assistant">
+            <div class="assistant-avatar">
+              <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            </div>
+            <div class="message-content">
+              <div class="tool-use">
+                <div class="tool-icon read">
+                  <svg viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v10H2z M4 5h8 M4 7h8 M4 9h6"/></svg>
+                </div>
+                <span class="tool-name">Read</span>
+                <span class="tool-target">src/nppes/provider-search.ts</span>
+                <div class="tool-status">
+                  <div class="dot"></div>
+                  <span>done</span>
+                </div>
+              </div>
+
+              <div class="tool-use" style="border-color: var(--accent-dim);">
+                <div class="tool-icon edit">
+                  <svg viewBox="0 0 16 16"><path fill="currentColor" d="M12.1 1.9l2 2-9 9H3.1v-2l9-9z"/></svg>
+                </div>
+                <span class="tool-name">Edit</span>
+                <span class="tool-target">src/fhir/patient.service.ts</span>
+                <div class="tool-status">
+                  <div class="dot" style="background: var(--accent);"></div>
+                  <span style="color: var(--accent);">writing</span>
+                </div>
+              </div>
+
+              <div class="message-bubble">
+                <p>I found your NPPES provider search module. I'll create a Patient service that bridges the FHIR search with your existing provider data<span class="cursor-blink"></span></p>
+              </div>
+
+              <div class="message-time">
+                <span class="streaming-indicator">
+                  <span class="streaming-dots"><span></span><span></span><span></span></span>
+                  streaming
+                </span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Input Bar -->
+      <div class="input-bar">
+        <div class="input-wrapper">
+          <textarea
+            class="input-textarea"
+            id="messageInput"
+            placeholder="Message Claude about CareQuotesAI..."
+            rows="1"
+          ></textarea>
+          <div class="input-actions">
+            <button class="input-btn btn-attach" title="Attach context">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M13.5 7.5l-6 6a3 3 0 0 1-4.24-4.24l6-6a2 2 0 0 1 2.83 2.83l-6 6a1 1 0 0 1-1.42-1.42l6-6"/>
+              </svg>
+            </button>
+            <button class="input-btn btn-send" id="sendBtn" title="Send message">
+              <svg viewBox="0 0 16 16" fill="currentColor">
+                <path d="M2.5 2L14 8 2.5 14V9.5L10 8 2.5 6.5V2z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="input-hint">
+          <span><kbd>Enter</kbd> to send</span>
+          <span><kbd>Shift+Enter</kbd> for new line</span>
+          <span style="margin-left: auto;">claude-opus-4-6 via Max</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── Interactive prototype logic ───
+
+const textarea = document.getElementById('messageInput');
+const sendBtn = document.getElementById('sendBtn');
+const messagesContainer = document.getElementById('messagesContainer');
+const messagesScroll = document.getElementById('messagesScroll');
+
+// Auto-resize textarea
+textarea.addEventListener('input', () => {
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
+});
+
+// Send on Enter
+textarea.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+sendBtn.addEventListener('click', sendMessage);
+
+function sendMessage() {
+  const text = textarea.value.trim();
+  if (!text) return;
+
+  // Add user message
+  const userMsg = document.createElement('div');
+  userMsg.className = 'message-group message-user';
+  userMsg.innerHTML = `<div class="message-bubble">${escapeHtml(text)}</div>`;
+  messagesContainer.appendChild(userMsg);
+
+  textarea.value = '';
+  textarea.style.height = 'auto';
+  scrollToBottom();
+
+  // Simulate streaming response
+  setTimeout(() => simulateResponse(text), 600);
+}
+
+function simulateResponse(userText) {
+  const group = document.createElement('div');
+  group.className = 'message-group message-assistant';
+  group.innerHTML = `
+    <div class="assistant-avatar">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+    </div>
+    <div class="message-content">
+      <div class="message-bubble">
+        <p><span id="streamTarget"></span><span class="cursor-blink"></span></p>
+      </div>
+      <div class="message-time">
+        <span class="streaming-indicator">
+          <span class="streaming-dots"><span></span><span></span><span></span></span>
+          streaming
+        </span>
+      </div>
+    </div>
+  `;
+  messagesContainer.appendChild(group);
+  scrollToBottom();
+
+  // Simulate streaming text
+  const response = "I'll look into that for you. Let me check the relevant files in your project and work on implementing a solution that fits with your existing architecture.";
+  const target = group.querySelector('#streamTarget');
+  target.removeAttribute('id');
+  let i = 0;
+
+  const interval = setInterval(() => {
+    if (i < response.length) {
+      target.textContent += response[i];
+      i++;
+      scrollToBottom();
+    } else {
+      clearInterval(interval);
+      const cursor = group.querySelector('.cursor-blink');
+      if (cursor) cursor.remove();
+      const timeEl = group.querySelector('.message-time');
+      timeEl.innerHTML = 'just now';
+    }
+  }, 18);
+}
+
+function scrollToBottom() {
+  messagesScroll.scrollTop = messagesScroll.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Session tab switching
+document.querySelectorAll('.session-tab').forEach(tab => {
+  tab.addEventListener('click', (e) => {
+    if (e.target.classList.contains('tab-close')) {
+      tab.remove();
+      return;
+    }
+    document.querySelectorAll('.session-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// New session
+document.querySelector('.session-new').addEventListener('click', () => {
+  const name = prompt('Topic name:');
+  if (!name) return;
+  const tab = document.createElement('div');
+  tab.className = 'session-tab active';
+  tab.innerHTML = `
+    <span class="tab-icon">&#9679;</span>
+    ${escapeHtml(name)}
+    <span class="tab-close">&times;</span>
+  `;
+  document.querySelectorAll('.session-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('.session-new').before(tab);
+
+  tab.addEventListener('click', (e) => {
+    if (e.target.classList.contains('tab-close')) { tab.remove(); return; }
+    document.querySelectorAll('.session-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// Workstream switching
+document.querySelectorAll('.workstream-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.workstream-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+  });
+});
+
+// Detail tab switching with panel visibility
+const infoPanel = document.getElementById('infoPanel');
+const chatPanel = document.getElementById('chatPanel');
+
+function switchToChat() {
+  document.querySelectorAll('.detail-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.detail-tab')[2].classList.add('active');
+  infoPanel.classList.remove('visible');
+  chatPanel.classList.remove('hidden');
+}
+
+document.querySelectorAll('.detail-tab').forEach((tab, idx) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.detail-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+
+    if (idx === 2) { // Chat tab
+      infoPanel.classList.remove('visible');
+      chatPanel.classList.remove('hidden');
+    } else {
+      chatPanel.classList.add('hidden');
+      infoPanel.classList.add('visible');
+    }
+  });
+});
+
+// Initial scroll
+scrollToBottom();
+</script>
+</body>
+</html>
