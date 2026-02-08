@@ -72,8 +72,8 @@ export function SyncSettings({ workstreams }: Props) {
   return (
     <section className="sync-settings">
       <header>
-        <h2>Claude Desktop Sync</h2>
-        <p>Configure source path, validate connector, and link chats to workstreams.</p>
+        <h2>Claude Code Sync</h2>
+        <p>Configure session path, validate connector, and link sessions to workstreams.</p>
       </header>
 
       <div className="sync-grid">
@@ -82,7 +82,7 @@ export function SyncSettings({ workstreams }: Props) {
           <p>Current path: {currentPath || 'Not configured'}</p>
           <form onSubmit={handleSavePath} className="inline-form">
             <input
-              placeholder="/Users/you/Library/Application Support/Claude/Local Storage/leveldb"
+              placeholder="/Users/you/.claude/projects"
               value={pathInput}
               onChange={(event) => setPathInput(event.target.value)}
             />
@@ -97,14 +97,14 @@ export function SyncSettings({ workstreams }: Props) {
               <p>Checking...</p>
             ) : (
               <p>
-                {diagnosticsQuery.data?.exists ? 'Path reachable' : 'Path unavailable'}
+                {diagnosticsQuery.data?.exists ? 'Path reachable' : 'Path unavailable or empty'}
                 {diagnosticsQuery.data?.error ? `: ${diagnosticsQuery.data.error}` : ''}
               </p>
             )}
           </div>
 
           <button type="button" onClick={() => void handleRunSync()} disabled={!sourceId || runSyncMutation.isPending}>
-            {runSyncMutation.isPending ? 'Importing...' : 'Import Conversations'}
+            {runSyncMutation.isPending ? 'Importing...' : 'Import Sessions'}
           </button>
         </div>
 
@@ -124,9 +124,9 @@ export function SyncSettings({ workstreams }: Props) {
       </div>
 
       <div className="panel">
-        <h3>Conversations</h3>
+        <h3>Sessions</h3>
         <label>
-          Link selected conversation to workstream
+          Link selected session to workstream
           <select
             value={selectedId ?? ''}
             onChange={(event) => setSelectedWorkstreamId(Number(event.target.value))}
@@ -153,7 +153,7 @@ export function SyncSettings({ workstreams }: Props) {
             </article>
           ))}
 
-          {!conversationsQuery.data?.length && <p>No conversations found at current source path.</p>}
+          {!conversationsQuery.data?.length && <p>No sessions found at current source path.</p>}
         </div>
       </div>
     </section>

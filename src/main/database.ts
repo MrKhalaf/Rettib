@@ -14,15 +14,110 @@ import type {
   UpdateTaskInput,
   UpdateWorkstreamInput,
   Workstream,
+  WorkstreamChatSession,
   WorkstreamListItem
 } from '../shared/types'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 let dbInstance: Database.Database | null = null
 
 function nowMs(): number {
   return Date.now()
+}
+
+function ensureChatSessionSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workstream_chat_sessions (
+      workstream_id INTEGER PRIMARY KEY REFERENCES workstreams(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL,
+      project_cwd TEXT,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workstream_chat_sessions_updated
+    ON workstream_chat_sessions(updated_at DESC);
+  `)
+}
+
+function normalizeClaudeSyncSourceType(db: Database.Database): void {
+  const cliSource = db
+    .prepare(
+      `
+      SELECT id
+      FROM sync_sources
+      WHERE type = 'claude_cli'
+      LIMIT 1
+      `
+    )
+    .get() as { id: number } | undefined
+
+  if (cliSource) {
+    return
+  }
+
+  const desktopSource = db
+    .prepare(
+      `
+      SELECT id
+      FROM sync_sources
+      WHERE type = 'claude_desktop'
+      LIMIT 1
+      `
+    )
+    .get() as { id: number } | undefined
+
+  if (!desktopSource) {
+    return
+  }
+
+  db.prepare(
+    `
+    UPDATE sync_sources
+    SET type = 'claude_cli', updated_at = ?
+    WHERE id = ?
+    `
+  ).run(nowMs(), desktopSource.id)
+}
+
+function normalizeClaudeSyncSourcePath(db: Database.Database): void {
+  const source = db
+    .prepare(
+      `
+      SELECT id, config
+      FROM sync_sources
+      WHERE type = 'claude_cli'
+      LIMIT 1
+      `
+    )
+    .get() as { id: number; config: string } | undefined
+
+  if (!source) {
+    return
+  }
+
+  let parsedConfig: { path?: unknown }
+  try {
+    parsedConfig = JSON.parse(source.config) as { path?: unknown }
+  } catch {
+    parsedConfig = {}
+  }
+
+  const currentPath = typeof parsedConfig.path === 'string' ? parsedConfig.path : ''
+  const looksLegacyLevelDbPath =
+    currentPath.includes('Library/Application Support/Claude/Local Storage/leveldb') || currentPath.endsWith('/leveldb')
+
+  if (!looksLegacyLevelDbPath) {
+    return
+  }
+
+  db.prepare(
+    `
+    UPDATE sync_sources
+    SET config = ?, updated_at = ?
+    WHERE id = ?
+    `
+  ).run(JSON.stringify({ path: defaultClaudePath() }), nowMs(), source.id)
 }
 
 export function initDatabase(databasePath: string): Database.Database {
@@ -52,6 +147,9 @@ function runMigrations(db: Database.Database): void {
   const version = db.pragma('user_version', { simple: true }) as number
 
   if (version >= SCHEMA_VERSION) {
+    ensureChatSessionSchema(db)
+    normalizeClaudeSyncSourceType(db)
+    normalizeClaudeSyncSourcePath(db)
     seedInitialWorkstreams(db)
     return
   }
@@ -100,6 +198,13 @@ function runMigrations(db: Database.Database): void {
         UNIQUE(workstream_id, conversation_uuid)
       );
 
+      CREATE TABLE IF NOT EXISTS workstream_chat_sessions (
+        workstream_id INTEGER PRIMARY KEY REFERENCES workstreams(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL,
+        project_cwd TEXT,
+        updated_at INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS sync_sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         type TEXT NOT NULL,
@@ -123,6 +228,7 @@ function runMigrations(db: Database.Database): void {
       CREATE INDEX IF NOT EXISTS idx_progress_updates_workstream ON progress_updates(workstream_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tasks_workstream ON tasks(workstream_id, status, position);
       CREATE INDEX IF NOT EXISTS idx_chat_refs_workstream ON chat_references(workstream_id, chat_timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_workstream_chat_sessions_updated ON workstream_chat_sessions(updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_sync_runs_source ON sync_runs(source_id, started_at DESC);
 
       CREATE TRIGGER IF NOT EXISTS trg_progress_insert_update_workstream
@@ -192,6 +298,12 @@ function runMigrations(db: Database.Database): void {
     if (!columnNames.has('notes')) {
       db.exec(`ALTER TABLE workstreams ADD COLUMN notes TEXT`)
     }
+  }
+
+  if (version < 3) {
+    ensureChatSessionSchema(db)
+    normalizeClaudeSyncSourceType(db)
+    normalizeClaudeSyncSourcePath(db)
   }
 
   db.pragma(`user_version = ${SCHEMA_VERSION}`)
@@ -672,6 +784,20 @@ export function listChatReferences(workstreamId: number, db = getDatabase()): Ch
     .all(workstreamId) as ChatReference[]
 }
 
+export function listLinkedConversationUuids(db = getDatabase()): string[] {
+  const rows = db
+    .prepare(
+      `
+      SELECT DISTINCT conversation_uuid
+      FROM chat_references
+      ORDER BY conversation_uuid ASC
+      `
+    )
+    .all() as Array<{ conversation_uuid: string }>
+
+  return rows.map((row) => row.conversation_uuid)
+}
+
 export function getLatestChatReference(workstreamId: number, db = getDatabase()): ChatReference | null {
   const row = db
     .prepare(
@@ -729,7 +855,7 @@ export function linkChatReference(
     `
   ).run(
     workstreamId,
-    payload.source ?? 'claude_desktop',
+    payload.source ?? 'claude_cli',
     payload.conversation_uuid,
     payload.conversation_title ?? null,
     payload.last_user_message ?? null,
@@ -745,6 +871,52 @@ export function unlinkChatReference(workstreamId: number, conversationUuid: stri
     WHERE workstream_id = ? AND conversation_uuid = ?
     `
   ).run(workstreamId, conversationUuid)
+}
+
+export function getWorkstreamChatSession(workstreamId: number, db = getDatabase()): WorkstreamChatSession | null {
+  const row = db
+    .prepare(
+      `
+      SELECT
+        workstream_id,
+        session_id,
+        project_cwd,
+        updated_at
+      FROM workstream_chat_sessions
+      WHERE workstream_id = ?
+      LIMIT 1
+      `
+    )
+    .get(workstreamId) as WorkstreamChatSession | undefined
+
+  return row ?? null
+}
+
+export function setWorkstreamChatSession(
+  workstreamId: number,
+  sessionId: string,
+  projectCwd: string | null,
+  db = getDatabase()
+): WorkstreamChatSession {
+  const updatedAt = nowMs()
+  db.prepare(
+    `
+    INSERT INTO workstream_chat_sessions (
+      workstream_id,
+      session_id,
+      project_cwd,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(workstream_id)
+    DO UPDATE SET
+      session_id = excluded.session_id,
+      project_cwd = excluded.project_cwd,
+      updated_at = excluded.updated_at
+    `
+  ).run(workstreamId, sessionId, projectCwd, updatedAt)
+
+  return getWorkstreamChatSession(workstreamId, db) as WorkstreamChatSession
 }
 
 export function listWorkstreamsWithLatestChat(db = getDatabase()): WorkstreamListItem[] {
@@ -766,7 +938,7 @@ export function listWorkstreamsWithLatestChat(db = getDatabase()): WorkstreamLis
 }
 
 function defaultClaudePath(): string {
-  return path.join(process.env.HOME ?? '', 'Library/Application Support/Claude/Local Storage/leveldb')
+  return path.join(process.env.HOME ?? '', '.claude', 'projects')
 }
 
 export function getOrCreateClaudeSyncSource(db = getDatabase()): SyncSource {
@@ -775,13 +947,34 @@ export function getOrCreateClaudeSyncSource(db = getDatabase()): SyncSource {
       `
       SELECT id, type, config, created_at, updated_at
       FROM sync_sources
-      WHERE type = 'claude_desktop'
+      WHERE type IN ('claude_cli', 'claude_desktop')
+      ORDER BY CASE type WHEN 'claude_cli' THEN 0 ELSE 1 END
       LIMIT 1
       `
     )
     .get() as SyncSource | undefined
 
   if (existing) {
+    if (existing.type !== 'claude_cli') {
+      db.prepare(
+        `
+        UPDATE sync_sources
+        SET type = 'claude_cli', updated_at = ?
+        WHERE id = ?
+        `
+      ).run(nowMs(), existing.id)
+
+      return db
+        .prepare(
+          `
+          SELECT id, type, config, created_at, updated_at
+          FROM sync_sources
+          WHERE id = ?
+          `
+        )
+        .get(existing.id) as SyncSource
+    }
+
     return existing
   }
 
@@ -791,7 +984,7 @@ export function getOrCreateClaudeSyncSource(db = getDatabase()): SyncSource {
     .prepare(
       `
       INSERT INTO sync_sources (type, config, created_at, updated_at)
-      VALUES ('claude_desktop', ?, ?, ?)
+      VALUES ('claude_cli', ?, ?, ?)
       `
     )
     .run(config, now, now)

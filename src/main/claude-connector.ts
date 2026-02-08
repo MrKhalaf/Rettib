@@ -1,225 +1,353 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
-import { Level } from 'level'
+import type { ClaudeConversation, ClaudeConversationPreviewMessage, SyncDiagnostics } from '../shared/types'
 
-import type { ClaudeConversation, SyncDiagnostics } from '../shared/types'
-
-interface ConversationAccumulator {
-  conversation_uuid: string
-  title: string | null
-  chat_timestamp: number | null
-  last_user_message: string | null
+interface SessionIndexEntry {
+  sessionId: string
+  fullPath: string | null
+  fileMtime: number | null
+  firstPrompt: string | null
+  summary: string | null
+  modified: number | null
 }
 
-function defaultClaudeLevelDbPath(): string {
-  return path.join(process.env.HOME ?? '', 'Library/Application Support/Claude/Local Storage/leveldb')
+function defaultClaudeProjectsPath(): string {
+  return path.join(os.homedir(), '.claude', 'projects')
 }
 
-function maybeParseJson(value: string): unknown {
-  if (!value) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function toNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') {
     return null
   }
 
-  const first = value.trim()[0]
-  if (first !== '{' && first !== '[' && first !== '"') {
-    return value
-  }
-
-  try {
-    return JSON.parse(value)
-  } catch {
-    return value
-  }
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
 }
 
-function isLikelyUuid(value: string): boolean {
-  return /^[A-Za-z0-9-]{8,}$/.test(value)
-}
-
-function parseConversationKey(key: string): { conversationUuid: string; property: string } | null {
-  const parts = key.split(':')
-  const conversationIndex = parts.findIndex((part) => part === 'conversation')
-
-  if (conversationIndex === -1) {
-    return null
-  }
-
-  const conversationUuid = parts[conversationIndex + 1]
-  if (!conversationUuid || !isLikelyUuid(conversationUuid)) {
-    return null
-  }
-
-  const property = parts.slice(conversationIndex + 2).join(':') || 'payload'
-  return { conversationUuid, property }
-}
-
-function extractTimestampFromUnknown(value: unknown): number | null {
+function toTimestampMs(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return value > 10_000_000_000 ? Math.floor(value) : Math.floor(value * 1000)
+    if (value > 10_000_000_000) {
+      return Math.floor(value)
+    }
+
+    return Math.floor(value * 1000)
   }
 
   if (typeof value === 'string') {
     const asNumber = Number(value)
     if (Number.isFinite(asNumber)) {
-      return extractTimestampFromUnknown(asNumber)
+      return toTimestampMs(asNumber)
     }
 
-    const dateMs = Date.parse(value)
-    return Number.isNaN(dateMs) ? null : dateMs
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? null : parsed
   }
 
-  if (!value || typeof value !== 'object') {
+  return null
+}
+
+function listSessionsIndexFiles(rootPath: string): string[] {
+  if (!rootPath || !fs.existsSync(rootPath)) {
+    return []
+  }
+
+  const stat = fs.statSync(rootPath)
+  if (stat.isFile()) {
+    return path.basename(rootPath) === 'sessions-index.json' ? [rootPath] : []
+  }
+
+  const indexFiles: string[] = []
+  const queue: string[] = [rootPath]
+
+  while (queue.length > 0) {
+    const current = queue.pop() as string
+    let entries: fs.Dirent[]
+
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      const resolved = path.join(current, entry.name)
+      if (entry.isDirectory()) {
+        queue.push(resolved)
+      } else if (entry.isFile() && entry.name === 'sessions-index.json') {
+        indexFiles.push(resolved)
+      }
+    }
+  }
+
+  return indexFiles
+}
+
+function extractUserText(content: unknown): string | null {
+  if (typeof content === 'string') {
+    const text = content.trim()
+    if (!text) {
+      return null
+    }
+
+    if (text.includes('<local-command-caveat>') || text.includes('<command-name>/exit</command-name>')) {
+      return null
+    }
+
+    return text.slice(0, 300)
+  }
+
+  if (!Array.isArray(content)) {
     return null
   }
 
-  const candidateKeys = ['timestamp', 'updatedAt', 'updated_at', 'createdAt', 'created_at', 'lastUpdated']
-  for (const key of candidateKeys) {
-    if (key in value) {
-      const parsed = extractTimestampFromUnknown((value as Record<string, unknown>)[key])
-      if (parsed) {
-        return parsed
+  const parts: string[] = []
+  for (const item of content) {
+    if (typeof item === 'string') {
+      const value = item.trim()
+      if (value) {
+        parts.push(value)
       }
+      continue
+    }
+
+    if (!isRecord(item)) {
+      continue
+    }
+
+    if (item.type === 'text' && typeof item.text === 'string') {
+      const value = item.text.trim()
+      if (value) {
+        parts.push(value)
+      }
+      continue
+    }
+
+    if (typeof item.content === 'string') {
+      const value = item.content.trim()
+      if (value) {
+        parts.push(value)
+      }
+    }
+  }
+
+  if (parts.length === 0) {
+    return null
+  }
+
+  const joined = parts.join(' ').replace(/\s+/g, ' ').trim()
+  if (!joined) {
+    return null
+  }
+
+  return joined.slice(0, 300)
+}
+
+function extractLastUserMessageFromSessionFile(filePath: string): string | null {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null
+  }
+
+  let contents: string
+  try {
+    contents = fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return null
+  }
+
+  const lines = contents
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let parsed: unknown
+
+    try {
+      parsed = JSON.parse(lines[i])
+    } catch {
+      continue
+    }
+
+    if (!isRecord(parsed) || parsed.type !== 'user' || parsed.isMeta === true) {
+      continue
+    }
+
+    const message = parsed.message
+    if (!isRecord(message) || message.role !== 'user') {
+      continue
+    }
+
+    const extracted = extractUserText(message.content)
+    if (extracted) {
+      return extracted
     }
   }
 
   return null
 }
 
-function extractTitleFromUnknown(value: unknown): string | null {
-  if (!value) {
-    return null
+function extractConversationMessagesFromSessionFile(filePath: string): ClaudeConversationPreviewMessage[] {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return []
   }
 
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    return trimmed.length > 0 ? trimmed : null
+  let contents: string
+  try {
+    contents = fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return []
   }
 
-  if (typeof value !== 'object') {
-    return null
-  }
+  const lines = contents
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
 
-  const candidateKeys = ['title', 'name', 'conversationTitle']
-  for (const key of candidateKeys) {
-    const candidate = (value as Record<string, unknown>)[key]
-    if (typeof candidate === 'string' && candidate.trim().length > 0) {
-      return candidate.trim()
+  const messages: ClaudeConversationPreviewMessage[] = []
+  for (const line of lines) {
+    let parsed: unknown
+
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      continue
     }
+
+    if (!isRecord(parsed) || parsed.isMeta === true) {
+      continue
+    }
+
+    const rawType = toNonEmptyString(parsed.type)
+    const message = isRecord(parsed.message) ? parsed.message : null
+    const rawRole = toNonEmptyString(message?.role) ?? rawType
+    if (rawRole !== 'user' && rawRole !== 'assistant') {
+      continue
+    }
+
+    const content = message?.content ?? parsed.content ?? parsed.text
+    const text = extractUserText(content)
+    if (!text) {
+      continue
+    }
+
+    const timestamp = toTimestampMs(parsed.timestamp ?? parsed.created_at ?? message?.timestamp ?? message?.created_at)
+    messages.push({
+      role: rawRole,
+      text,
+      timestamp
+    })
   }
 
-  return null
+  return messages
 }
 
-function flattenRichText(node: unknown, output: string[]): void {
-  if (!node) {
-    return
+function parseSessionEntries(indexPath: string): SessionIndexEntry[] {
+  let fileContents: string
+
+  try {
+    fileContents = fs.readFileSync(indexPath, 'utf8')
+  } catch {
+    return []
   }
 
-  if (typeof node === 'string') {
-    if (node.trim()) {
-      output.push(node.trim())
+  let parsedJson: unknown
+  try {
+    parsedJson = JSON.parse(fileContents)
+  } catch {
+    return []
+  }
+
+  if (!isRecord(parsedJson) || !Array.isArray(parsedJson.entries)) {
+    return []
+  }
+
+  const rows: SessionIndexEntry[] = []
+  for (const rawEntry of parsedJson.entries) {
+    if (!isRecord(rawEntry)) {
+      continue
     }
-    return
-  }
 
-  if (typeof node !== 'object') {
-    return
-  }
-
-  if ('text' in node && typeof (node as { text: unknown }).text === 'string') {
-    const text = (node as { text: string }).text.trim()
-    if (text) {
-      output.push(text)
+    const sessionId = toNonEmptyString(rawEntry.sessionId)
+    if (!sessionId) {
+      continue
     }
+
+    rows.push({
+      sessionId,
+      fullPath: toNonEmptyString(rawEntry.fullPath),
+      fileMtime: toTimestampMs(rawEntry.fileMtime),
+      firstPrompt: toNonEmptyString(rawEntry.firstPrompt),
+      summary: toNonEmptyString(rawEntry.summary),
+      modified: toTimestampMs(rawEntry.modified)
+    })
   }
 
-  if (Array.isArray((node as { content?: unknown[] }).content)) {
-    for (const child of (node as { content: unknown[] }).content) {
-      flattenRichText(child, output)
-    }
-  }
-
-  if (Array.isArray((node as { children?: unknown[] }).children)) {
-    for (const child of (node as { children: unknown[] }).children) {
-      flattenRichText(child, output)
-    }
-  }
+  return rows
 }
 
-function extractLastUserMessageFromUnknown(value: unknown): string | null {
-  if (!value) {
-    return null
+function isGenericSessionSummary(summary: string | null): boolean {
+  if (!summary) {
+    return true
   }
 
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    return trimmed ? trimmed.slice(0, 300) : null
+  const normalized = summary.toLowerCase()
+  return normalized.includes('user exited') || normalized === 'session'
+}
+
+function selectConversationTitle(entry: SessionIndexEntry): string {
+  if (!isGenericSessionSummary(entry.summary)) {
+    return entry.summary as string
   }
 
-  if (typeof value !== 'object') {
-    return null
+  const firstPrompt = entry.firstPrompt
+  if (firstPrompt && firstPrompt.toLowerCase() !== 'no prompt') {
+    return firstPrompt.length > 80 ? `${firstPrompt.slice(0, 80)}...` : firstPrompt
   }
 
-  const record = value as Record<string, unknown>
-
-  if (Array.isArray(record.messages)) {
-    for (let i = record.messages.length - 1; i >= 0; i -= 1) {
-      const message = record.messages[i] as Record<string, unknown>
-      const role = String(message.role ?? message.sender ?? '')
-      if (role.toLowerCase() !== 'user') {
-        continue
-      }
-
-      const text =
-        extractLastUserMessageFromUnknown(message.text) ??
-        extractLastUserMessageFromUnknown(message.content) ??
-        extractLastUserMessageFromUnknown(message.body)
-
-      if (text) {
-        return text
-      }
-    }
-  }
-
-  if (record.editorState && typeof record.editorState === 'object') {
-    const pieces: string[] = []
-    flattenRichText(record.editorState, pieces)
-    if (pieces.length > 0) {
-      return pieces.join(' ').slice(0, 300)
-    }
-  }
-
-  if (record.content && typeof record.content === 'object') {
-    const pieces: string[] = []
-    flattenRichText(record.content, pieces)
-    if (pieces.length > 0) {
-      return pieces.join(' ').slice(0, 300)
-    }
-  }
-
-  return null
+  return entry.sessionId
 }
 
 export class ClaudeConnector {
-  private readonly levelDbPath: string
+  private readonly projectsPath: string
 
-  constructor(levelDbPath = defaultClaudeLevelDbPath()) {
-    this.levelDbPath = levelDbPath
+  constructor(projectsPath = defaultClaudeProjectsPath()) {
+    this.projectsPath = projectsPath
   }
 
   diagnostics(): SyncDiagnostics {
     try {
-      const exists = fs.existsSync(this.levelDbPath)
+      const exists = fs.existsSync(this.projectsPath)
+      if (!exists) {
+        return {
+          exists: false,
+          path: this.projectsPath,
+          error: 'Path does not exist'
+        }
+      }
+
+      const indexFiles = listSessionsIndexFiles(this.projectsPath)
+      if (indexFiles.length === 0) {
+        return {
+          exists: false,
+          path: this.projectsPath,
+          error: 'No sessions-index.json files found'
+        }
+      }
+
       return {
-        exists,
-        path: this.levelDbPath,
-        error: exists ? undefined : 'Path does not exist'
+        exists: true,
+        path: this.projectsPath
       }
     } catch (error) {
       return {
         exists: false,
-        path: this.levelDbPath,
+        path: this.projectsPath,
         error: error instanceof Error ? error.message : 'Unknown filesystem error'
       }
     }
@@ -231,55 +359,38 @@ export class ClaudeConnector {
       return []
     }
 
-    const conversations = new Map<string, ConversationAccumulator>()
-    const db = new Level<string, string>(this.levelDbPath, {
-      keyEncoding: 'utf8',
-      valueEncoding: 'utf8'
-    })
+    const entriesBySession = new Map<string, SessionIndexEntry>()
+    const indexFiles = listSessionsIndexFiles(this.projectsPath)
 
-    try {
-      for await (const [key, rawValue] of db.iterator()) {
-        const parsedKey = parseConversationKey(key)
-        if (!parsedKey) {
-          continue
+    for (const indexFile of indexFiles) {
+      const entries = parseSessionEntries(indexFile)
+      for (const entry of entries) {
+        const existing = entriesBySession.get(entry.sessionId)
+        const entryTimestamp = entry.modified ?? entry.fileMtime ?? 0
+        const existingTimestamp = existing?.modified ?? existing?.fileMtime ?? 0
+
+        if (!existing || entryTimestamp >= existingTimestamp) {
+          entriesBySession.set(entry.sessionId, entry)
         }
-
-        const parsedValue = maybeParseJson(rawValue)
-        const { conversationUuid, property } = parsedKey
-
-        const accumulator =
-          conversations.get(conversationUuid) ?? {
-            conversation_uuid: conversationUuid,
-            title: null,
-            chat_timestamp: null,
-            last_user_message: null
-          }
-
-        const timestamp = extractTimestampFromUnknown(parsedValue)
-        if (timestamp && (!accumulator.chat_timestamp || timestamp > accumulator.chat_timestamp)) {
-          accumulator.chat_timestamp = timestamp
-        }
-
-        if (property.includes('title')) {
-          accumulator.title = extractTitleFromUnknown(parsedValue) ?? accumulator.title
-        } else if (!accumulator.title) {
-          accumulator.title = extractTitleFromUnknown(parsedValue)
-        }
-
-        const message = this.extractLastUserMessage(parsedValue)
-        if (message) {
-          accumulator.last_user_message = message
-        }
-
-        conversations.set(conversationUuid, accumulator)
       }
-    } finally {
-      await db.close()
     }
 
-    return Array.from(conversations.values()).sort((a, b) => {
-      return (b.chat_timestamp ?? 0) - (a.chat_timestamp ?? 0)
-    })
+    const conversations: ClaudeConversation[] = []
+    for (const entry of entriesBySession.values()) {
+      const timestamp = entry.modified ?? entry.fileMtime ?? null
+      const lastMessage = extractLastUserMessageFromSessionFile(entry.fullPath ?? '')
+      const fallbackPrompt = entry.firstPrompt?.toLowerCase() === 'no prompt' ? null : entry.firstPrompt
+
+      conversations.push({
+        conversation_uuid: entry.sessionId,
+        title: selectConversationTitle(entry),
+        chat_timestamp: timestamp,
+        last_user_message: lastMessage ?? fallbackPrompt
+      })
+    }
+
+    conversations.sort((a, b) => (b.chat_timestamp ?? 0) - (a.chat_timestamp ?? 0))
+    return conversations
   }
 
   async getConversationDetail(uuid: string): Promise<ClaudeConversation | null> {
@@ -287,7 +398,40 @@ export class ClaudeConnector {
     return conversations.find((conversation) => conversation.conversation_uuid === uuid) ?? null
   }
 
-  private extractLastUserMessage(editorState: unknown): string | null {
-    return extractLastUserMessageFromUnknown(editorState)
+  async getConversationPreview(uuid: string, limit = 4): Promise<ClaudeConversationPreviewMessage[]> {
+    const trimmedUuid = uuid.trim()
+    if (!trimmedUuid) {
+      return []
+    }
+
+    const diagnostics = this.diagnostics()
+    if (!diagnostics.exists) {
+      return []
+    }
+
+    const entriesBySession = new Map<string, SessionIndexEntry>()
+    const indexFiles = listSessionsIndexFiles(this.projectsPath)
+
+    for (const indexFile of indexFiles) {
+      const entries = parseSessionEntries(indexFile)
+      for (const entry of entries) {
+        const existing = entriesBySession.get(entry.sessionId)
+        const entryTimestamp = entry.modified ?? entry.fileMtime ?? 0
+        const existingTimestamp = existing?.modified ?? existing?.fileMtime ?? 0
+
+        if (!existing || entryTimestamp >= existingTimestamp) {
+          entriesBySession.set(entry.sessionId, entry)
+        }
+      }
+    }
+
+    const target = entriesBySession.get(trimmedUuid)
+    if (!target?.fullPath) {
+      return []
+    }
+
+    const allMessages = extractConversationMessagesFromSessionFile(target.fullPath)
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(20, Math.floor(limit))) : 4
+    return allMessages.slice(-safeLimit)
   }
 }
