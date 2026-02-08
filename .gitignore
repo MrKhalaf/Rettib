@@ -3,3 +3,8 @@ node_modules
 dist
 dist-electron
 *.log
+.env
+.env.*
+!.env.example
+release/
+chat-prototype.html

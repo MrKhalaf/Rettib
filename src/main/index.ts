@@ -16,6 +16,84 @@ let mainWindow: BrowserWindow | null = null
 app.setName('Rettib')
 app.setPath('userData', path.join(app.getPath('appData'), 'rettib'))
 
+function parseEnvAssignment(rawLine: string): [string, string] | null {
+  const trimmedLine = rawLine.trim()
+  if (!trimmedLine || trimmedLine.startsWith('#')) {
+    return null
+  }
+
+  const line = trimmedLine.startsWith('export ') ? trimmedLine.slice(7).trim() : trimmedLine
+  const separatorIndex = line.indexOf('=')
+  if (separatorIndex <= 0) {
+    return null
+  }
+
+  const key = line.slice(0, separatorIndex).trim()
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    return null
+  }
+
+  let value = line.slice(separatorIndex + 1).trim()
+  const isDoubleQuoted = value.startsWith('"') && value.endsWith('"')
+  const isSingleQuoted = value.startsWith("'") && value.endsWith("'")
+
+  if (isDoubleQuoted || isSingleQuoted) {
+    value = value.slice(1, -1)
+  } else {
+    const commentIndex = value.indexOf(' #')
+    if (commentIndex >= 0) {
+      value = value.slice(0, commentIndex).trim()
+    }
+  }
+
+  if (isDoubleQuoted) {
+    value = value.replace(/\\n/g, '\n')
+  }
+
+  return [key, value]
+}
+
+function loadDotEnvFile(filePath: string, lockedEnvKeys: Set<string>): void {
+  if (!fs.existsSync(filePath)) {
+    return
+  }
+
+  let fileContents: string
+  try {
+    fileContents = fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return
+  }
+
+  for (const line of fileContents.split(/\r?\n/)) {
+    const assignment = parseEnvAssignment(line)
+    if (!assignment) {
+      continue
+    }
+
+    const [key, value] = assignment
+    if (lockedEnvKeys.has(key)) {
+      continue
+    }
+
+    process.env[key] = value
+  }
+}
+
+function loadLocalEnvFiles(): void {
+  const lockedEnvKeys = new Set(Object.keys(process.env))
+  const candidateRoots = Array.from(
+    new Set([process.cwd(), path.resolve(__dirname, '..'), path.resolve(__dirname, '../..')])
+  )
+
+  for (const rootPath of candidateRoots) {
+    loadDotEnvFile(path.join(rootPath, '.env'), lockedEnvKeys)
+    loadDotEnvFile(path.join(rootPath, '.env.local'), lockedEnvKeys)
+  }
+}
+
+loadLocalEnvFiles()
+
 function firstExistingPath(candidates: string[]): string {
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
