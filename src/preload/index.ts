@@ -21,8 +21,23 @@ const api: ElectronApi = {
   },
   chat: {
     listConversations: () => ipcRenderer.invoke('chat:list-conversations'),
+    listLinkedConversationUuids: () => ipcRenderer.invoke('chat:list-linked-conversation-uuids'),
+    getConversationPreview: (conversationUuid, limit) =>
+      ipcRenderer.invoke('chat:get-conversation-preview', conversationUuid, limit),
     link: (workstreamId, conversationUuid) => ipcRenderer.invoke('chat:link', workstreamId, conversationUuid),
-    unlink: (workstreamId, conversationUuid) => ipcRenderer.invoke('chat:unlink', workstreamId, conversationUuid)
+    unlink: (workstreamId, conversationUuid) => ipcRenderer.invoke('chat:unlink', workstreamId, conversationUuid),
+    getWorkstreamSession: (workstreamId) => ipcRenderer.invoke('chat:get-workstream-session', workstreamId),
+    sendMessage: (input) => ipcRenderer.invoke('chat:send-message', input),
+    cancelStream: (streamId) => ipcRenderer.invoke('chat:cancel-stream', streamId),
+    onStreamEvent: (listener) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        listener(payload as Parameters<typeof listener>[0])
+      }
+      ipcRenderer.on('chat:stream-event', handler)
+      return () => {
+        ipcRenderer.removeListener('chat:stream-event', handler)
+      }
+    }
   },
   sync: {
     run: (sourceId) => ipcRenderer.invoke('sync:run', sourceId),

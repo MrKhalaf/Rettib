@@ -1,6 +1,6 @@
 export type WorkstreamStatus = 'active' | 'blocked' | 'waiting' | 'done'
 export type TaskStatus = 'todo' | 'in_progress' | 'done'
-export type SyncSourceType = 'claude_desktop'
+export type SyncSourceType = 'claude_cli' | 'claude_desktop'
 export type SyncRunStatus = 'running' | 'success' | 'failed'
 
 export interface Workstream {
@@ -73,11 +73,54 @@ export interface ChatReference {
   linked_at: number
 }
 
+export interface WorkstreamChatSession {
+  workstream_id: number
+  session_id: string
+  project_cwd: string | null
+  updated_at: number
+}
+
 export interface ClaudeConversation {
   conversation_uuid: string
   title: string | null
   chat_timestamp: number | null
   last_user_message: string | null
+}
+
+export interface ClaudeConversationPreviewMessage {
+  role: 'user' | 'assistant'
+  text: string
+  timestamp: number | null
+}
+
+export interface SendChatMessageInput {
+  workstream_id: number
+  message: string
+  cwd?: string | null
+  resume_session_id?: string | null
+  allow_workstream_session_fallback?: boolean
+  model?: string | null
+}
+
+export interface SendChatMessageResult {
+  stream_id: string
+  session_id: string | null
+  assistant_text: string
+  result_text: string | null
+  is_error: boolean
+  exit_code: number | null
+}
+
+export type ChatStreamEventType = 'init' | 'token' | 'assistant' | 'tool_use' | 'result' | 'error' | 'done'
+
+export interface ChatStreamEvent {
+  stream_id: string
+  type: ChatStreamEventType
+  timestamp: number
+  session_id?: string | null
+  text?: string
+  data?: unknown
+  error?: string
 }
 
 export interface SyncSource {
@@ -148,8 +191,14 @@ export interface ElectronApi {
   }
   chat: {
     listConversations: () => Promise<ClaudeConversation[]>
+    listLinkedConversationUuids: () => Promise<string[]>
+    getConversationPreview: (conversationUuid: string, limit?: number) => Promise<ClaudeConversationPreviewMessage[]>
     link: (workstreamId: number, conversationUuid: string) => Promise<void>
     unlink: (workstreamId: number, conversationUuid: string) => Promise<void>
+    getWorkstreamSession: (workstreamId: number) => Promise<WorkstreamChatSession | null>
+    sendMessage: (input: SendChatMessageInput) => Promise<SendChatMessageResult>
+    cancelStream: (streamId: string) => Promise<void>
+    onStreamEvent: (listener: (event: ChatStreamEvent) => void) => () => void
   }
   sync: {
     run: (sourceId: number) => Promise<void>

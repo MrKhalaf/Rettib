@@ -6,7 +6,24 @@ import { WORKSTREAMS_QUERY_KEY } from './useWorkstreams'
 export function useConversations() {
   return useQuery({
     queryKey: ['chat', 'conversations'],
-    queryFn: () => chatApi.listConversations()
+    queryFn: () => chatApi.listConversations(),
+    refetchInterval: 30_000
+  })
+}
+
+export function useLinkedConversationUuids() {
+  return useQuery({
+    queryKey: ['chat', 'linked-conversation-uuids'],
+    queryFn: () => chatApi.listLinkedConversationUuids(),
+    refetchInterval: 30_000
+  })
+}
+
+export function useWorkstreamChatSession(workstreamId: number | null) {
+  return useQuery({
+    queryKey: ['chat', 'session', workstreamId],
+    queryFn: () => chatApi.getWorkstreamSession(workstreamId as number),
+    enabled: workstreamId !== null
   })
 }
 
@@ -19,6 +36,7 @@ export function useLinkConversation() {
     onSuccess: (_data, vars) => {
       void queryClient.invalidateQueries({ queryKey: WORKSTREAMS_QUERY_KEY })
       void queryClient.invalidateQueries({ queryKey: ['workstream', vars.workstreamId] })
+      void queryClient.invalidateQueries({ queryKey: ['chat', 'linked-conversation-uuids'] })
     }
   })
 }
@@ -32,6 +50,7 @@ export function useUnlinkConversation() {
     onSuccess: (_data, vars) => {
       void queryClient.invalidateQueries({ queryKey: WORKSTREAMS_QUERY_KEY })
       void queryClient.invalidateQueries({ queryKey: ['workstream', vars.workstreamId] })
+      void queryClient.invalidateQueries({ queryKey: ['chat', 'linked-conversation-uuids'] })
     }
   })
 }
