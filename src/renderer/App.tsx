@@ -4,14 +4,15 @@ import type { CreateWorkstreamInput } from '../shared/types'
 import { Dashboard } from './components/Dashboard'
 import { QuickCapture } from './components/QuickCapture'
 import { SyncSettings } from './components/SyncSettings'
+import { UtilityDrawer } from './components/UtilityDrawer'
 import { WorkstreamDetail } from './components/WorkstreamDetail'
 import { useLogProgress } from './hooks/useProgress'
 import { useCreateWorkstream, useWorkstreams } from './hooks/useWorkstreams'
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'sync'>('dashboard')
   const [selectedWorkstreamId, setSelectedWorkstreamId] = useState<number | null>(null)
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false)
+  const [syncDrawerOpen, setSyncDrawerOpen] = useState(false)
 
   const workstreamsQuery = useWorkstreams()
   const createWorkstreamMutation = useCreateWorkstream()
@@ -33,6 +34,10 @@ export default function App() {
         event.preventDefault()
         setQuickCaptureOpen(true)
       }
+
+      if (event.key === 'Escape') {
+        setSyncDrawerOpen(false)
+      }
     }
 
     window.addEventListener('keydown', handleKeydown)
@@ -51,47 +56,23 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="top-nav">
-        <div className="brand">
-          <img src="/rettib-logo.svg" alt="Rettib logo" className="brand-logo" />
-          <h1>Rettib</h1>
-        </div>
-        <nav>
-          <button
-            type="button"
-            className={activeView === 'dashboard' ? 'active' : ''}
-            onClick={() => setActiveView('dashboard')}
-          >
-            Dashboard
-          </button>
-          <button
-            type="button"
-            className={activeView === 'sync' ? 'active' : ''}
-            onClick={() => setActiveView('sync')}
-          >
-            Sync
-          </button>
-        </nav>
-      </header>
+      <main className="app-main">
+        <Dashboard
+          workstreams={workstreams}
+          isLoading={workstreamsQuery.isLoading}
+          errorMessage={workstreamsError}
+          selectedWorkstreamId={selectedWorkstreamId}
+          onSelectWorkstream={setSelectedWorkstreamId}
+          onCreateWorkstream={handleCreateWorkstream}
+          onOpenQuickCapture={() => setQuickCaptureOpen(true)}
+          onOpenSync={() => setSyncDrawerOpen(true)}
+        />
+        <WorkstreamDetail workstreamId={selectedWorkstreamId} />
+      </main>
 
-      {activeView === 'dashboard' ? (
-        <main className="main-layout">
-          <Dashboard
-            workstreams={workstreams}
-            isLoading={workstreamsQuery.isLoading}
-            errorMessage={workstreamsError}
-            selectedWorkstreamId={selectedWorkstreamId}
-            onSelectWorkstream={setSelectedWorkstreamId}
-            onCreateWorkstream={handleCreateWorkstream}
-            onOpenQuickCapture={() => setQuickCaptureOpen(true)}
-          />
-          <WorkstreamDetail workstreamId={selectedWorkstreamId} />
-        </main>
-      ) : (
-        <main className="sync-layout">
-          <SyncSettings workstreams={workstreams} />
-        </main>
-      )}
+      <UtilityDrawer open={syncDrawerOpen} title="Sync" onClose={() => setSyncDrawerOpen(false)}>
+        <SyncSettings workstreams={workstreams} />
+      </UtilityDrawer>
 
       <QuickCapture
         open={quickCaptureOpen}
