@@ -170,6 +170,54 @@ function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
   }
 }
 
+const MAX_CONVERSATION_TITLE_LENGTH = 80
+const DEFAULT_TOPIC_TITLE = 'New topic'
+
+function normalizeConversationTitle(rawTitle: string | null | undefined): string | null {
+  if (!rawTitle) {
+    return null
+  }
+
+  const compacted = rawTitle.replace(/\s+/g, ' ').trim()
+  if (!compacted) {
+    return null
+  }
+
+  if (compacted.toLowerCase() === 'no prompt') {
+    return null
+  }
+
+  return compacted.length > MAX_CONVERSATION_TITLE_LENGTH
+    ? `${compacted.slice(0, MAX_CONVERSATION_TITLE_LENGTH)}...`
+    : compacted
+}
+
+function deriveTopicTitleFromMessage(message: string): string | null {
+  const compacted = message.replace(/\s+/g, ' ').trim()
+  if (!compacted) {
+    return null
+  }
+
+  const sentenceBoundary = compacted.search(/[.?!](?:\s|$)/)
+  const sentence = sentenceBoundary > 0 ? compacted.slice(0, sentenceBoundary) : compacted
+  const cleaned = sentence.replace(/^["'`([{]+|["'`)\]}]+$/g, '').trim()
+  if (!cleaned) {
+    return null
+  }
+
+  return cleaned.length > MAX_CONVERSATION_TITLE_LENGTH
+    ? `${cleaned.slice(0, MAX_CONVERSATION_TITLE_LENGTH)}...`
+    : cleaned
+}
+
+function areTitlesEqual(left: string | null, right: string | null): boolean {
+  if (!left || !right) {
+    return false
+  }
+
+  return left.trim().toLowerCase() === right.trim().toLowerCase()
+}
+
 function makeConnectorFromSource(): ClaudeConnector {
   const db = getDatabase()
   const source = getOrCreateClaudeSyncSource(db)
@@ -367,11 +415,24 @@ export function registerIpcHandlers(): void {
     const sessionId = result.session_id ?? resumeSessionId
     if (sessionId) {
       setWorkstreamChatSession(payload.workstream_id, sessionId, cwd, db)
+
+      const existingReference =
+        listChatReferences(payload.workstream_id, db).find((chat) => chat.conversation_uuid === sessionId) ?? null
+      const existingTitle = normalizeConversationTitle(existingReference?.conversation_title ?? null)
+      const workstreamNameTitle = normalizeConversationTitle(workstream.name)
+      const preferredExistingTitle = areTitlesEqual(existingTitle, workstreamNameTitle) ? null : existingTitle
+
+      const connector = makeConnectorFromSource()
+      const conversation = await connector.getConversationDetail(sessionId).catch(() => null)
+      const connectorTitle = normalizeConversationTitle(conversation?.title ?? null)
+      const messageTopicTitle = deriveTopicTitleFromMessage(payload.message)
+      const resolvedConversationTitle = connectorTitle ?? preferredExistingTitle ?? messageTopicTitle ?? DEFAULT_TOPIC_TITLE
+
       linkChatReference(
         payload.workstream_id,
         {
           conversation_uuid: sessionId,
-          conversation_title: workstream.name,
+          conversation_title: resolvedConversationTitle,
           last_user_message: payload.message,
           chat_timestamp: Date.now(),
           source: 'claude_cli'
