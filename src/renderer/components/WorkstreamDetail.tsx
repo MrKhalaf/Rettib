@@ -242,6 +242,17 @@ function buildLinkedChatTabs(chats: ChatReference[], closedConversationIds: Set<
     }))
 }
 
+function buildHistoryMessages(messages: ClaudeConversationPreviewMessage[]): LiveChatMessage[] {
+  const fallbackStart = Date.now() - messages.length * 1000
+
+  return messages.map((message, index) => ({
+    id: createChatMessageId('history'),
+    role: message.role,
+    text: message.text,
+    createdAt: message.timestamp ?? fallbackStart + index * 1000
+  }))
+}
+
 export function WorkstreamDetail({ workstreamId }: Props) {
   const [activeTab, setActiveTab] = useState<DetailTab>('info')
 
@@ -256,12 +267,12 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const [settingsSaved, setSettingsSaved] = useState(false)
 
   const [chatInput, setChatInput] = useState('')
-  const [chatMessages, setChatMessages] = useState<LiveChatMessage[]>([])
+  const [chatMessagesByTab, setChatMessagesByTab] = useState<Record<string, LiveChatMessage[]>>({})
   const [isSendingChat, setIsSendingChat] = useState(false)
   const [activeStreamId, setActiveStreamId] = useState<string | null>(null)
   const [chatSessionId, setChatSessionId] = useState<string | null>(null)
   const [chatProjectCwd, setChatProjectCwd] = useState<string | null>(null)
-  const [chatSendError, setChatSendError] = useState<string | null>(null)
+  const [chatSendErrorsByTab, setChatSendErrorsByTab] = useState<Record<string, string | null>>({})
 
   const [chatTabs, setChatTabs] = useState<ChatTopicTab[]>([])
   const [activeChatTabId, setActiveChatTabId] = useState<string | null>(null)
@@ -275,6 +286,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const activeAssistantMessageIdRef = useRef<string | null>(null)
   const activeStreamIdRef = useRef<string | null>(null)
   const activeChatTabIdRef = useRef<string | null>(null)
+  const activeMessageTabIdRef = useRef<string | null>(null)
+  const streamTabLookupRef = useRef<Record<string, string>>({})
   const isSendingChatRef = useRef(false)
 
   const chatFeedRef = useRef<HTMLDivElement | null>(null)
@@ -361,13 +374,59 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     return chatTabs.find((tab) => tab.id === activeChatTabId) ?? null
   }, [chatTabs, activeChatTabId])
 
+  const activeChatMessages = useMemo(() => {
+    if (!activeChatTabId) {
+      return []
+    }
+
+    return chatMessagesByTab[activeChatTabId] ?? []
+  }, [chatMessagesByTab, activeChatTabId])
+  const activeChatConversationId = activeChatTab?.conversationUuid ?? activeChatTab?.resumeSessionId ?? null
+  const activeConversationPreview = activeChatConversationId ? conversationPreviews[activeChatConversationId] : undefined
+  const isActiveChatHistoryLoading = activeChatMessages.length === 0 && activeConversationPreview?.status === 'loading'
+  const activeChatHistoryError = activeChatMessages.length === 0 && activeConversationPreview?.status === 'error' ? activeConversationPreview.error : null
+  const activeChatSendError = activeChatTabId ? (chatSendErrorsByTab[activeChatTabId] ?? null) : null
+  const activeTabLinkedChats = useMemo(() => {
+    if (!detail || !activeChatConversationId) {
+      return []
+    }
+
+    return detail.chats.filter((chat) => chat.conversation_uuid === activeChatConversationId)
+  }, [detail, activeChatConversationId])
+  const linkedSessionEmptyMessage = activeChatConversationId
+    ? 'No linked session found for this topic.'
+    : 'This topic is not linked to a session yet.'
   const visibleSessionId = activeChatTab?.resumeSessionId ?? null
-  const hasChatActivity = chatMessages.length > 0
+  const hasChatActivity = activeChatMessages.length > 0
 
   const score = detail?.workstream.score
   const priorityPercent = score ? Math.min(100, Math.max(0, (score.priority_score / 5) * 100)) : 0
   const stalenessPercent = score ? Math.min(100, Math.max(0, score.staleness_ratio * 100)) : 0
   const blockedPercent = score ? Math.min(100, Math.max(0, Math.abs(Math.min(0, score.blocked_penalty)) * 20)) : 0
+
+  function setChatErrorForTab(tabId: string, error: string | null) {
+    setChatSendErrorsByTab((previous) => {
+      const current = previous[tabId] ?? null
+      if (current === error) {
+        return previous
+      }
+
+      if (error === null) {
+        if (!(tabId in previous)) {
+          return previous
+        }
+
+        const next = { ...previous }
+        delete next[tabId]
+        return next
+      }
+
+      return {
+        ...previous,
+        [tabId]: error
+      }
+    })
+  }
 
   function promoteActiveTabWithSession(sessionId: string) {
     const normalized = sessionId.trim()
@@ -462,9 +521,9 @@ export function WorkstreamDetail({ workstreamId }: Props) {
 
   useEffect(() => {
     setActiveTab('info')
-    setChatMessages([])
+    setChatMessagesByTab({})
     setChatInput('')
-    setChatSendError(null)
+    setChatSendErrorsByTab({})
     setIsSendingChat(false)
     setActiveStreamId(null)
     setChatTabs([])
@@ -479,6 +538,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     activeStreamIdRef.current = null
     activeAssistantMessageIdRef.current = null
     activeChatTabIdRef.current = null
+    activeMessageTabIdRef.current = null
+    streamTabLookupRef.current = {}
     isSendingChatRef.current = false
   }, [workstreamId])
 
@@ -547,6 +608,130 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   }, [chatTabs, activeChatTabId])
 
   useEffect(() => {
+    const validTabIds = new Set(chatTabs.map((tab) => tab.id))
+    const hasSameKeys = <T,>(current: Record<string, T>, next: Record<string, T>): boolean => {
+      const currentKeys = Object.keys(current)
+      const nextKeys = Object.keys(next)
+      if (currentKeys.length !== nextKeys.length) {
+        return false
+      }
+
+      return nextKeys.every((key) => key in current)
+    }
+
+    const pruneRecordByTab = <T,>(record: Record<string, T>): Record<string, T> => {
+      const next: Record<string, T> = {}
+      for (const [tabId, value] of Object.entries(record)) {
+        if (validTabIds.has(tabId)) {
+          next[tabId] = value
+        }
+      }
+      return next
+    }
+
+    setChatMessagesByTab((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
+
+    setChatSendErrorsByTab((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
+  }, [chatTabs])
+
+  useEffect(() => {
+    if (!activeChatTabId || !activeChatConversationId || activeChatMessages.length > 0) {
+      return
+    }
+
+    const existing = conversationPreviews[activeChatConversationId]
+    if (existing?.status === 'ready') {
+      if (existing.messages.length === 0) {
+        return
+      }
+
+      setChatMessagesByTab((previous) => {
+        if ((previous[activeChatTabId]?.length ?? 0) > 0) {
+          return previous
+        }
+
+        return {
+          ...previous,
+          [activeChatTabId]: buildHistoryMessages(existing.messages)
+        }
+      })
+      return
+    }
+
+    if (existing?.status === 'loading') {
+      return
+    }
+
+    setConversationPreviews((previous) => ({
+      ...previous,
+      [activeChatConversationId]: {
+        status: 'loading',
+        messages: [],
+        error: null
+      }
+    }))
+
+    let cancelled = false
+
+    void chatApi
+      .getConversationPreview(activeChatConversationId, 4)
+      .then((messages) => {
+        if (cancelled) {
+          return
+        }
+
+        setConversationPreviews((previous) => ({
+          ...previous,
+          [activeChatConversationId]: {
+            status: 'ready',
+            messages,
+            error: null
+          }
+        }))
+
+        if (messages.length === 0) {
+          return
+        }
+
+        setChatMessagesByTab((previous) => {
+          if ((previous[activeChatTabId]?.length ?? 0) > 0) {
+            return previous
+          }
+
+          return {
+            ...previous,
+            [activeChatTabId]: buildHistoryMessages(messages)
+          }
+        })
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return
+        }
+
+        const errorMessage = error instanceof Error ? error.message : 'Failed to load conversation preview'
+        setConversationPreviews((previous) => ({
+          ...previous,
+          [activeChatConversationId]: {
+            status: 'error',
+            messages: [],
+            error: errorMessage
+          }
+        }))
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeChatTabId, activeChatConversationId, activeChatMessages.length, conversationPreviews])
+
+  useEffect(() => {
     const unsubscribe = chatApi.onStreamEvent((streamEvent) => {
       const activeStream = activeStreamIdRef.current
       if (activeStream && streamEvent.stream_id !== activeStream) {
@@ -560,6 +745,15 @@ export function WorkstreamDetail({ workstreamId }: Props) {
 
         activeStreamIdRef.current = streamEvent.stream_id
         setActiveStreamId(streamEvent.stream_id)
+
+        if (activeMessageTabIdRef.current) {
+          streamTabLookupRef.current[streamEvent.stream_id] = activeMessageTabIdRef.current
+        }
+      }
+
+      const targetTabId = streamTabLookupRef.current[streamEvent.stream_id] ?? activeMessageTabIdRef.current
+      if (!targetTabId) {
+        return
       }
 
       if (streamEvent.session_id) {
@@ -575,67 +769,102 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       if (streamEvent.type === 'tool_use' && activeAssistantMessageIdRef.current) {
         const assistantId = activeAssistantMessageIdRef.current
         const toolUse = buildToolUseEntry(streamEvent.data)
-        setChatMessages((messages) =>
-          messages.map((message) =>
-            message.id === assistantId
-              ? {
-                  ...message,
-                  toolUses: [...(message.toolUses ?? []), toolUse]
-                }
-              : message
-          )
-        )
+        setChatMessagesByTab((previous) => {
+          const messages = previous[targetTabId]
+          if (!messages || messages.length === 0) {
+            return previous
+          }
+
+          return {
+            ...previous,
+            [targetTabId]: messages.map((message) =>
+              message.id === assistantId
+                ? {
+                    ...message,
+                    toolUses: [...(message.toolUses ?? []), toolUse]
+                  }
+                : message
+            )
+          }
+        })
       }
 
       if (streamEvent.type === 'token' && streamEvent.text && activeAssistantMessageIdRef.current) {
         const assistantId = activeAssistantMessageIdRef.current
         const tokenText = streamEvent.text
-        setChatMessages((messages) =>
-          messages.map((message) =>
-            message.id === assistantId ? { ...message, text: `${message.text}${tokenText}` } : message
-          )
-        )
+        setChatMessagesByTab((previous) => {
+          const messages = previous[targetTabId]
+          if (!messages || messages.length === 0) {
+            return previous
+          }
+
+          return {
+            ...previous,
+            [targetTabId]: messages.map((message) =>
+              message.id === assistantId ? { ...message, text: `${message.text}${tokenText}` } : message
+            )
+          }
+        })
       }
 
       if (streamEvent.type === 'assistant' && streamEvent.text && activeAssistantMessageIdRef.current) {
         const assistantId = activeAssistantMessageIdRef.current
         const assistantText = streamEvent.text
-        setChatMessages((messages) =>
-          messages.map((message) =>
-            message.id === assistantId
-              ? {
-                  ...message,
-                  text: message.text.trim() ? message.text : assistantText
-                }
-              : message
-          )
-        )
+        setChatMessagesByTab((previous) => {
+          const messages = previous[targetTabId]
+          if (!messages || messages.length === 0) {
+            return previous
+          }
+
+          return {
+            ...previous,
+            [targetTabId]: messages.map((message) =>
+              message.id === assistantId
+                ? {
+                    ...message,
+                    text: message.text.trim() ? message.text : assistantText
+                  }
+                : message
+            )
+          }
+        })
       }
 
       if (streamEvent.type === 'error' && streamEvent.error) {
-        setChatSendError(streamEvent.error)
+        setChatErrorForTab(targetTabId, streamEvent.error)
       }
 
       if (streamEvent.type === 'done') {
         setIsSendingChat(false)
         setActiveStreamId(null)
         activeStreamIdRef.current = null
+        delete streamTabLookupRef.current[streamEvent.stream_id]
 
         if (activeAssistantMessageIdRef.current) {
           const assistantId = activeAssistantMessageIdRef.current
-          setChatMessages((messages) =>
-            messages.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    streaming: false,
-                    toolUses: message.toolUses?.map((toolUse) => ({ ...toolUse, status: 'done' }))
-                  }
-                : message
-            )
-          )
+          setChatMessagesByTab((previous) => {
+            const messages = previous[targetTabId]
+            if (!messages || messages.length === 0) {
+              return previous
+            }
+
+            return {
+              ...previous,
+              [targetTabId]: messages.map((message) =>
+                message.id === assistantId
+                  ? {
+                      ...message,
+                      streaming: false,
+                      toolUses: message.toolUses?.map((toolUse) => ({ ...toolUse, status: 'done' }))
+                    }
+                  : message
+              )
+            }
+          })
           activeAssistantMessageIdRef.current = null
         }
+
+        activeMessageTabIdRef.current = null
       }
     })
 
@@ -648,7 +877,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     }
 
     chatFeedRef.current.scrollTop = chatFeedRef.current.scrollHeight
-  }, [chatMessages])
+  }, [activeChatMessages])
 
   if (workstreamId === null) {
     return (
@@ -901,6 +1130,36 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   }
 
   function handleCloseChatTab(tabId: string) {
+    setChatMessagesByTab((previous) => {
+      if (!(tabId in previous)) {
+        return previous
+      }
+
+      const next = { ...previous }
+      delete next[tabId]
+      return next
+    })
+
+    setChatSendErrorsByTab((previous) => {
+      if (!(tabId in previous)) {
+        return previous
+      }
+
+      const next = { ...previous }
+      delete next[tabId]
+      return next
+    })
+
+    if (activeMessageTabIdRef.current === tabId) {
+      activeMessageTabIdRef.current = null
+    }
+
+    for (const [streamId, mappedTabId] of Object.entries(streamTabLookupRef.current)) {
+      if (mappedTabId === tabId) {
+        delete streamTabLookupRef.current[streamId]
+      }
+    }
+
     setChatTabs((tabs) => {
       const closingTab = tabs.find((tab) => tab.id === tabId)
       if (!closingTab) {
@@ -935,24 +1194,38 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       return
     }
 
+    const targetTabId = activeChatTabIdRef.current
+    if (!targetTabId) {
+      return
+    }
+
+    const targetTab = chatTabs.find((tab) => tab.id === targetTabId)
+    if (!targetTab) {
+      return
+    }
+
     const userMessageId = createChatMessageId('user')
     const assistantMessageId = createChatMessageId('assistant')
-    const activeTabSessionId = activeChatTab?.resumeSessionId ?? null
-    const allowWorkstreamSessionFallback = activeChatTab ? activeChatTab.kind !== 'new' : false
+    const activeTabSessionId = targetTab.resumeSessionId
+    const allowWorkstreamSessionFallback = targetTab.kind !== 'new'
 
     setChatInput('')
     resetChatInputHeight()
-    setChatSendError(null)
+    setChatErrorForTab(targetTabId, null)
     setIsSendingChat(true)
     setActiveStreamId(null)
     activeStreamIdRef.current = null
     activeAssistantMessageIdRef.current = assistantMessageId
+    activeMessageTabIdRef.current = targetTabId
 
-    setChatMessages((messages) => [
-      ...messages,
-      { id: userMessageId, role: 'user', text: message, createdAt: Date.now() },
-      { id: assistantMessageId, role: 'assistant', text: '', streaming: true, toolUses: [], createdAt: Date.now() }
-    ])
+    setChatMessagesByTab((previous) => ({
+      ...previous,
+      [targetTabId]: [
+        ...(previous[targetTabId] ?? []),
+        { id: userMessageId, role: 'user', text: message, createdAt: Date.now() },
+        { id: assistantMessageId, role: 'assistant', text: '', streaming: true, toolUses: [], createdAt: Date.now() }
+      ]
+    }))
 
     try {
       const result = await chatApi.sendMessage({
@@ -962,50 +1235,74 @@ export function WorkstreamDetail({ workstreamId }: Props) {
         allow_workstream_session_fallback: allowWorkstreamSessionFallback
       })
 
+      streamTabLookupRef.current[result.stream_id] = targetTabId
+
       if (result.session_id) {
         setChatSessionId(result.session_id)
         promoteActiveTabWithSession(result.session_id)
       }
 
       const fallbackText = result.assistant_text || result.result_text || 'No response text returned.'
-      setChatMessages((messages) =>
-        messages.map((chatMessage) =>
-          chatMessage.id === assistantMessageId
-            ? {
-                ...chatMessage,
-                text: chatMessage.text.trim() ? chatMessage.text : fallbackText,
-                streaming: false,
-                error: result.is_error,
-                toolUses: chatMessage.toolUses?.map((toolUse) => ({ ...toolUse, status: 'done' }))
-              }
-            : chatMessage
-        )
-      )
+      setChatMessagesByTab((previous) => {
+        const messages = previous[targetTabId]
+        if (!messages || messages.length === 0) {
+          return previous
+        }
+
+        return {
+          ...previous,
+          [targetTabId]: messages.map((chatMessage) =>
+            chatMessage.id === assistantMessageId
+              ? {
+                  ...chatMessage,
+                  text: chatMessage.text.trim() ? chatMessage.text : fallbackText,
+                  streaming: false,
+                  error: result.is_error,
+                  toolUses: chatMessage.toolUses?.map((toolUse) => ({ ...toolUse, status: 'done' }))
+                }
+              : chatMessage
+          )
+        }
+      })
 
       if (result.is_error) {
-        setChatSendError(result.result_text ?? `Claude exited with code ${result.exit_code ?? 'unknown'}`)
+        setChatErrorForTab(targetTabId, result.result_text ?? `Claude exited with code ${result.exit_code ?? 'unknown'}`)
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to send chat message'
-      setChatSendError(errorMessage)
-      setChatMessages((messages) =>
-        messages.map((chatMessage) =>
-          chatMessage.id === assistantMessageId
-            ? {
-                ...chatMessage,
-                text: chatMessage.text.trim() ? chatMessage.text : errorMessage,
-                streaming: false,
-                error: true,
-                toolUses: chatMessage.toolUses?.map((toolUse) => ({ ...toolUse, status: 'done' }))
-              }
-            : chatMessage
-        )
-      )
+      setChatErrorForTab(targetTabId, errorMessage)
+      setChatMessagesByTab((previous) => {
+        const messages = previous[targetTabId]
+        if (!messages || messages.length === 0) {
+          return previous
+        }
+
+        return {
+          ...previous,
+          [targetTabId]: messages.map((chatMessage) =>
+            chatMessage.id === assistantMessageId
+              ? {
+                  ...chatMessage,
+                  text: chatMessage.text.trim() ? chatMessage.text : errorMessage,
+                  streaming: false,
+                  error: true,
+                  toolUses: chatMessage.toolUses?.map((toolUse) => ({ ...toolUse, status: 'done' }))
+                }
+              : chatMessage
+          )
+        }
+      })
     } finally {
+      const currentStreamId = activeStreamIdRef.current
+      if (currentStreamId) {
+        delete streamTabLookupRef.current[currentStreamId]
+      }
+
       setIsSendingChat(false)
       setActiveStreamId(null)
       activeStreamIdRef.current = null
       activeAssistantMessageIdRef.current = null
+      activeMessageTabIdRef.current = null
 
       void detailQuery.refetch()
       void conversationsQuery.refetch()
@@ -1046,7 +1343,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     )
   }
 
-  function renderLinkedSessionsList(chats: ChatReference[], mode: 'full' | 'compact') {
+  function renderLinkedSessionsList(chats: ChatReference[], mode: 'full' | 'compact', emptyMessage: string) {
     return (
       <div className={`chat-secondary-list ${mode === 'compact' ? 'chat-secondary-list-compact' : ''}`}>
         {chats.map((chat) => {
@@ -1100,7 +1397,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
             </article>
           )
         })}
-        {chats.length === 0 && <p className="section-empty">No linked sessions yet.</p>}
+        {chats.length === 0 && <p className="section-empty">{emptyMessage}</p>}
       </div>
     )
   }
@@ -1331,13 +1628,19 @@ export function WorkstreamDetail({ workstreamId }: Props) {
 
           <div className="messages-scroll" ref={chatFeedRef}>
             <div className="messages-container">
-              {chatMessages.length === 0 ? (
+              {activeChatMessages.length === 0 ? (
                 <div className="empty-state">
                   <div className="empty-title">Start the thread</div>
-                  <div className="empty-subtitle">Send a message to stream output from Claude Code CLI.</div>
+                  <div className="empty-subtitle">
+                    {isActiveChatHistoryLoading
+                      ? 'Loading last messages for this topic...'
+                      : activeChatHistoryError
+                        ? activeChatHistoryError
+                        : 'Send a message to stream output from Claude Code CLI.'}
+                  </div>
                 </div>
               ) : (
-                chatMessages.map((chatMessage) => {
+                activeChatMessages.map((chatMessage) => {
                   if (chatMessage.role === 'user') {
                     return (
                       <div key={chatMessage.id} className="message-group message-user">
@@ -1449,13 +1752,13 @@ export function WorkstreamDetail({ workstreamId }: Props) {
 
                   <div className="chat-secondary-card">
                     <div className="chat-secondary-title">Linked Sessions</div>
-                    {renderLinkedSessionsList(detail.chats, 'full')}
+                    {renderLinkedSessionsList(activeTabLinkedChats, 'full', linkedSessionEmptyMessage)}
                   </div>
                 </section>
               ) : (
                 <section className="chat-secondary-minimized">
                   <div className="chat-secondary-minimized-row">
-                    <span>Linked sessions ({detail.chats.length})</span>
+                    <span>Linked sessions ({activeTabLinkedChats.length})</span>
                     <button
                       type="button"
                       className="chat-secondary-minimized-toggle"
@@ -1465,7 +1768,9 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                     </button>
                   </div>
                   {showLinkedSessionsPanel && (
-                    <div className="chat-secondary-minimized-body">{renderLinkedSessionsList(detail.chats, 'compact')}</div>
+                    <div className="chat-secondary-minimized-body">
+                      {renderLinkedSessionsList(activeTabLinkedChats, 'compact', linkedSessionEmptyMessage)}
+                    </div>
                   )}
                 </section>
               )}
@@ -1508,7 +1813,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
               </span>
               <span className="input-model">claude-opus-4-6 via Max</span>
             </div>
-            {chatSendError && <p className="detail-inline-error">{chatSendError}</p>}
+            {activeChatSendError && <p className="detail-inline-error">{activeChatSendError}</p>}
           </form>
         </div>
       )}
