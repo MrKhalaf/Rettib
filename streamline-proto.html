@@ -1,0 +1,1763 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rettib Streamline Prototype</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Berkeley+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-deep: #0c0c0e;
+        --bg-surface: #141416;
+        --bg-raised: #1a1a1e;
+        --bg-hover: #222228;
+        --bg-active: #2a2a32;
+        --border: #2a2a30;
+        --border-subtle: #1e1e24;
+        --text-primary: #e8e6e3;
+        --text-secondary: #8a8a8e;
+        --text-tertiary: #5a5a60;
+        --accent: #c9a04e;
+        --accent-dim: #8a7035;
+        --accent-glow: rgba(201, 160, 78, 0.08);
+        --user-bg: #1a1d2e;
+        --user-border: #2a2d42;
+        --assistant-bg: #161618;
+        --success: #4a9e6e;
+        --error: #c45454;
+        --radius-sm: 6px;
+        --radius-md: 10px;
+        --radius-lg: 14px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: var(--text-primary);
+        background: radial-gradient(900px 500px at 76% -20%, var(--accent-glow), transparent 62%), var(--bg-deep);
+      }
+
+      button,
+      input {
+        font: inherit;
+        color: inherit;
+      }
+
+      button {
+        border: 1px solid var(--border);
+        background: var(--bg-raised);
+        border-radius: var(--radius-sm);
+        padding: 0.42rem 0.78rem;
+        cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease;
+      }
+
+      button:hover {
+        background: var(--bg-hover);
+        border-color: #36363e;
+      }
+
+      .app {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        grid-template-columns: 310px 1fr;
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--border);
+        background: var(--bg-surface);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      .sidebar-head {
+        padding: 20px 16px 12px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+
+      .brand-mark {
+        width: 22px;
+        height: 22px;
+        border: 1px solid var(--accent-dim);
+        border-radius: var(--radius-sm);
+        color: var(--accent);
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+      }
+
+      .brand-name {
+        margin: 0;
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+      }
+
+      .search-input {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: #111114;
+        color: var(--text-primary);
+        padding: 9px 10px;
+        outline: none;
+      }
+
+      .search-input:focus {
+        border-color: var(--accent-dim);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+      }
+
+      .sidebar-content {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 12px;
+        display: grid;
+        gap: 16px;
+      }
+
+      .section-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 0 4px 8px;
+      }
+
+      .section-title {
+        margin: 0;
+        font-size: 10px;
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+      }
+
+      .section-note {
+        font-size: 10px;
+        color: var(--text-tertiary);
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+      }
+
+      .project-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+      }
+
+      .project-item {
+        width: 100%;
+        border: 1px solid transparent;
+        background: transparent;
+        border-radius: var(--radius-sm);
+        padding: 10px 10px;
+        text-align: left;
+        display: grid;
+        gap: 5px;
+        position: relative;
+      }
+
+      .project-item:hover {
+        background: var(--bg-hover);
+      }
+
+      .project-item.active {
+        background: var(--bg-active);
+        border-color: var(--border);
+      }
+
+      .project-item.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 8px;
+        bottom: 8px;
+        width: 2px;
+        border-radius: 2px;
+        background: var(--accent);
+      }
+
+      .project-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .project-name {
+        font-size: 14px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .project-meta {
+        font-size: 10px;
+        color: var(--text-tertiary);
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .status-dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--success);
+      }
+
+      .status-dot.waiting {
+        background: var(--accent);
+      }
+
+      .status-dot.blocked {
+        background: var(--error);
+      }
+
+      .status-dot.done {
+        background: var(--text-secondary);
+      }
+
+      .project-checkpoint {
+        font-size: 12px;
+        color: var(--text-secondary);
+        line-height: 1.3;
+      }
+
+      .pin-btn {
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-size: 10px;
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .pin-btn.pinned {
+        border-color: var(--accent-dim);
+        color: var(--accent);
+      }
+
+      .empty-state {
+        margin: 0;
+        padding: 2px 4px;
+        color: var(--text-tertiary);
+        font-size: 12px;
+      }
+
+      .main {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .main-head {
+        padding: 16px 24px 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-surface);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+      }
+
+      .title-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .main-title {
+        margin: 0;
+        font-size: 28px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      .status-pill {
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        font-size: 10px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        border: 1px solid rgba(74, 158, 110, 0.24);
+        color: var(--success);
+        background: rgba(74, 158, 110, 0.12);
+      }
+
+      .status-pill.waiting {
+        border-color: rgba(201, 160, 78, 0.3);
+        color: var(--accent);
+        background: rgba(201, 160, 78, 0.12);
+      }
+
+      .status-pill.blocked {
+        border-color: rgba(196, 84, 84, 0.24);
+        color: #e6a2a2;
+        background: rgba(196, 84, 84, 0.12);
+      }
+
+      .status-pill.done {
+        border-color: rgba(138, 138, 142, 0.24);
+        color: var(--text-secondary);
+        background: rgba(138, 138, 142, 0.1);
+      }
+
+      .head-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        border-color: var(--accent-dim);
+        color: #101012;
+        font-weight: 600;
+      }
+
+      .btn-primary:hover {
+        background: #d3aa57;
+      }
+
+      .ghost-btn {
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .view-pane {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .overview-wrap {
+        padding: 22px 24px 26px;
+        max-width: 980px;
+        margin: 0 auto;
+      }
+
+      .overview-stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .overview-stat {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-raised);
+        padding: 14px 14px 12px;
+      }
+
+      .overview-stat-label {
+        font-size: 10px;
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+      }
+
+      .overview-stat-value {
+        margin-top: 7px;
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        font-size: 34px;
+        line-height: 1;
+      }
+
+      .overview-stat-sub {
+        margin-top: 7px;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .overview-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .overview-card {
+        width: 100%;
+        text-align: left;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-raised);
+        padding: 14px 14px 12px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .overview-card:hover {
+        border-color: var(--accent-dim);
+        background: linear-gradient(180deg, rgba(201, 160, 78, 0.08), rgba(201, 160, 78, 0.02));
+      }
+
+      .overview-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .overview-card-name {
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .overview-card-meta {
+        font-size: 11px;
+        color: var(--text-tertiary);
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+      }
+
+      .overview-card-next {
+        font-size: 14px;
+        color: var(--text-primary);
+        line-height: 1.45;
+      }
+
+      .overview-card-foot {
+        font-size: 11px;
+        color: var(--text-secondary);
+      }
+
+      .detail-wrap {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .detail-tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-surface);
+        overflow-x: auto;
+      }
+
+      .detail-tab {
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        color: var(--text-tertiary);
+        font-size: 13px;
+        font-weight: 500;
+        padding: 10px 15px;
+        border-bottom: 2px solid transparent;
+      }
+
+      .detail-tab:hover {
+        color: var(--text-secondary);
+        background: transparent;
+      }
+
+      .detail-tab.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+
+      .tab-pane {
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .context-wrap {
+        max-width: 840px;
+        margin: 0 auto;
+        padding: 22px 24px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .context-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-raised);
+        padding: 12px 14px;
+      }
+
+      .context-label {
+        margin: 0 0 6px;
+        font-size: 10px;
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+      }
+
+      .context-value {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.45;
+        color: var(--text-secondary);
+      }
+
+      .context-value.strong {
+        color: var(--text-primary);
+        font-weight: 600;
+      }
+
+      .chip-row {
+        display: flex;
+        gap: 7px;
+        flex-wrap: wrap;
+      }
+
+      .chip {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--bg-surface);
+        padding: 3px 9px;
+        font-size: 11px;
+        color: var(--text-secondary);
+      }
+
+      .session-strip {
+        padding: 12px 24px 8px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+
+      .strip-label {
+        margin: 0 0 7px;
+        font-size: 10px;
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+      }
+
+      .session-tabs {
+        display: flex;
+        gap: 7px;
+        overflow: auto;
+        padding-bottom: 3px;
+      }
+
+      .session-tab {
+        border-radius: 999px;
+        white-space: nowrap;
+        font-size: 12px;
+        padding: 7px 11px;
+        background: var(--bg-raised);
+      }
+
+      .session-tab.active {
+        border-color: var(--accent-dim);
+        background: var(--accent-glow);
+        color: var(--text-primary);
+      }
+
+      .chat-panel {
+        margin: 10px 24px 0;
+        min-height: 0;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        background: var(--bg-deep);
+        overflow: hidden;
+      }
+
+      .chat-scroll {
+        height: min(52vh, 420px);
+        overflow: auto;
+        padding: 14px;
+        display: grid;
+        align-content: start;
+        gap: 10px;
+      }
+
+      .msg {
+        max-width: min(760px, 90%);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 10px 12px;
+        line-height: 1.45;
+        font-size: 13px;
+      }
+
+      .msg.user {
+        margin-left: auto;
+        background: var(--user-bg);
+        border-color: var(--user-border);
+      }
+
+      .msg.assistant {
+        background: var(--assistant-bg);
+      }
+
+      .msg-meta {
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--text-tertiary);
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+      }
+
+      .composer {
+        border-top: 1px solid var(--border-subtle);
+        margin: 10px 24px 16px;
+        padding-top: 10px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .composer-row {
+        display: flex;
+        gap: 8px;
+      }
+
+      .composer-input {
+        flex: 1;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: #111114;
+        color: var(--text-primary);
+        padding: 10px 12px;
+        outline: none;
+      }
+
+      .composer-input:focus {
+        border-color: var(--accent-dim);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+      }
+
+      .tasks-wrap,
+      .notes-wrap {
+        max-width: 840px;
+        margin: 0 auto;
+        padding: 22px 24px;
+      }
+
+      .tasks-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+      }
+
+      .task-item {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--bg-raised);
+        padding: 10px 12px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .task-status {
+        font-family: 'Berkeley Mono', 'SF Mono', monospace;
+        font-size: 10px;
+        color: var(--text-tertiary);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 2px 7px;
+        text-transform: uppercase;
+      }
+
+      .task-text {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      .notes-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-raised);
+        padding: 12px 14px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .notes-line {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      .seed-footnote {
+        margin: 0;
+        font-size: 10px;
+        color: var(--text-tertiary);
+      }
+
+      @media (max-width: 1080px) {
+        .overview-stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 940px) {
+        .app {
+          grid-template-columns: 1fr;
+          grid-template-rows: 42% 58%;
+        }
+
+        .sidebar {
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .main-head {
+          padding: 14px 16px 10px;
+        }
+
+        .overview-wrap,
+        .context-wrap,
+        .tasks-wrap,
+        .notes-wrap {
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+
+        .session-strip {
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+
+        .chat-panel,
+        .composer {
+          margin-left: 16px;
+          margin-right: 16px;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .main-title {
+          font-size: 20px;
+        }
+
+        .main-head {
+          display: grid;
+          justify-content: stretch;
+          gap: 10px;
+        }
+
+        .head-controls {
+          justify-content: flex-start;
+          flex-wrap: wrap;
+        }
+
+        .overview-stats {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <div class="brand">
+            <div class="brand-mark">R</div>
+            <h1 class="brand-name">RETTIB</h1>
+          </div>
+          <input id="search" class="search-input" type="search" placeholder="Search projects" />
+        </div>
+
+        <div class="sidebar-content">
+          <section>
+            <div class="section-title-row">
+              <h2 class="section-title">Focus</h2>
+              <span id="focusCount" class="section-note"></span>
+            </div>
+            <ul id="focusList" class="project-list"></ul>
+          </section>
+
+          <section>
+            <div class="section-title-row">
+              <h2 class="section-title">All Projects</h2>
+              <span class="section-note">Live seed</span>
+            </div>
+            <ul id="allList" class="project-list"></ul>
+          </section>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="main-head">
+          <div class="title-wrap">
+            <button id="overviewBtn" type="button" class="ghost-btn hidden">Overview</button>
+            <h2 id="mainTitle" class="main-title">Workstream Overview</h2>
+            <span id="projectStatus" class="status-pill hidden">active</span>
+          </div>
+          <div class="head-controls">
+            <button type="button">Quick Capture</button>
+            <button type="button" class="btn-primary">New Session</button>
+          </div>
+        </header>
+
+        <section id="overviewView" class="view-pane">
+          <div class="overview-wrap">
+            <div class="overview-stats">
+              <article class="overview-stat">
+                <div class="overview-stat-label">Total Workstreams</div>
+                <div id="statTotal" class="overview-stat-value">0</div>
+                <div class="overview-stat-sub">Live from rettib.db snapshot</div>
+              </article>
+              <article class="overview-stat">
+                <div class="overview-stat-label">Focus Projects</div>
+                <div id="statFocus" class="overview-stat-value">0</div>
+                <div class="overview-stat-sub">Pinned manually</div>
+              </article>
+              <article class="overview-stat">
+                <div class="overview-stat-label">Active</div>
+                <div id="statActive" class="overview-stat-value">0</div>
+                <div class="overview-stat-sub">Ready to work</div>
+              </article>
+              <article class="overview-stat">
+                <div class="overview-stat-label">Linked Sessions</div>
+                <div id="statSessions" class="overview-stat-value">0</div>
+                <div class="overview-stat-sub">Across all workstreams</div>
+              </article>
+            </div>
+
+            <div id="overviewGrid" class="overview-grid"></div>
+          </div>
+        </section>
+
+        <section id="workstreamView" class="detail-wrap hidden">
+          <div class="detail-tabs" role="tablist" aria-label="Workstream tabs">
+            <button class="detail-tab active" data-tab="chat" type="button">Chat</button>
+            <button class="detail-tab" data-tab="context" type="button">Context</button>
+            <button class="detail-tab" data-tab="tasks" type="button">Tasks</button>
+            <button class="detail-tab" data-tab="notes" type="button">Notes</button>
+          </div>
+
+          <div id="chatPane" class="tab-pane">
+            <section class="session-strip">
+              <p class="strip-label">Sessions</p>
+              <div id="sessionTabs" class="session-tabs"></div>
+            </section>
+
+            <section class="chat-panel">
+              <div id="chatList" class="chat-scroll"></div>
+            </section>
+
+            <form id="composerForm" class="composer">
+              <div class="composer-row">
+                <input
+                  id="composerInput"
+                  class="composer-input"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="Continue this thread..."
+                />
+                <button type="submit" class="btn-primary">Send</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="contextPane" class="tab-pane hidden">
+            <div class="context-wrap">
+              <article class="context-card">
+                <p class="context-label">Last Move</p>
+                <p id="contextLastMove" class="context-value"></p>
+              </article>
+              <article class="context-card">
+                <p class="context-label">Blocker</p>
+                <p id="contextBlocker" class="context-value"></p>
+              </article>
+              <article class="context-card">
+                <p class="context-label">Next Step</p>
+                <p id="contextNextStep" class="context-value strong"></p>
+              </article>
+              <article class="context-card">
+                <p class="context-label">Signals</p>
+                <div id="contextSignals" class="chip-row"></div>
+                <p id="contextMeta" class="seed-footnote"></p>
+              </article>
+            </div>
+          </div>
+
+          <div id="tasksPane" class="tab-pane hidden">
+            <div class="tasks-wrap">
+              <ul id="tasksList" class="tasks-list"></ul>
+            </div>
+          </div>
+
+          <div id="notesPane" class="tab-pane hidden">
+            <div class="notes-wrap">
+              <article class="notes-card">
+                <p id="noteNextAction" class="notes-line"></p>
+                <p id="noteSessionPath" class="notes-line"></p>
+                <p id="noteTimestamp" class="notes-line"></p>
+                <p class="seed-footnote">Prototype notes seeded from rettib.db snapshot (2026-02-08)</p>
+              </article>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const dbSeed = {
+        generated_at: '2026-02-08',
+        workstreams: [
+          {
+            id: 1,
+            name: 'CareQuotesAI',
+            priority: 5,
+            target_cadence_days: 2,
+            status: 'active',
+            next_action: 'TBD',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 2,
+            name: 'Job Search',
+            priority: 5,
+            target_cadence_days: 1,
+            status: 'active',
+            next_action: 'TBD',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 3,
+            name: 'DSPy Learning (disper)',
+            priority: 4,
+            target_cadence_days: 3,
+            status: 'active',
+            next_action: 'TBD',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 4,
+            name: 'sandbox-security-agent',
+            priority: 3,
+            target_cadence_days: 14,
+            status: 'waiting',
+            next_action: 'Draft outline for site (AI + security showcase)',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 5,
+            name: 'Cipher',
+            priority: 2,
+            target_cadence_days: 30,
+            status: 'waiting',
+            next_action: 'None - use as interview talking point',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 6,
+            name: 'Josh Mandel CMS Proposal',
+            priority: 1,
+            target_cadence_days: 30,
+            status: 'waiting',
+            next_action: 'Occasional review',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 7,
+            name: 'OrthoDrill',
+            priority: 1,
+            target_cadence_days: 30,
+            status: 'waiting',
+            next_action:
+              'Schedule conversation with orthopedic surgeon to discuss logging 20 cases for shot necessity analysis',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 8,
+            name: 'PDI Automation',
+            priority: 1,
+            target_cadence_days: 30,
+            status: 'waiting',
+            next_action: 'Occasional review',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 9,
+            name: 'Visibone',
+            priority: 1,
+            target_cadence_days: 30,
+            status: 'waiting',
+            next_action: 'Occasional review',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          },
+          {
+            id: 10,
+            name: 'X-Growth-Plan-Khalaf',
+            priority: 1,
+            target_cadence_days: 30,
+            status: 'waiting',
+            next_action: 'Occasional review',
+            updated_at: 1770578203909,
+            last_progress_at: null
+          }
+        ],
+        chat_references: [
+          {
+            workstream_id: 7,
+            conversation_uuid: '3d03d9ec-3a8b-418d-958c-53bcf8d25c78',
+            conversation_title: 'OrthoDrill',
+            last_user_message: 'repeat that?',
+            chat_timestamp: 1770541871930,
+            linked_at: 1770541871930
+          },
+          {
+            workstream_id: 9,
+            conversation_uuid: 'dea8a847-c667-44ad-83e5-0db022e41d97',
+            conversation_title: '3D Bone Viewer: Anatomy Labels & Deploy',
+            last_user_message: '<local-command-stdout>Bye!</local-command-stdout>',
+            chat_timestamp: 1769794453439,
+            linked_at: 1770532866612
+          },
+          {
+            workstream_id: 10,
+            conversation_uuid: 'd61ff5cf-ccc4-4f8f-b357-bd83026f326c',
+            conversation_title: 'X Growth Dashboard Implementation',
+            last_user_message:
+              "branch 'main' set up to track 'origin/main'. To https://github.com/MrKhalaf/XGrowth.git * [new branch] main -> main",
+            chat_timestamp: 1770011860517,
+            linked_at: 1770532846636
+          }
+        ],
+        chat_sessions: [
+          {
+            workstream_id: 2,
+            session_id: 'd5577a4c-571d-4ab6-a5a4-4e8cccdc74d6',
+            project_cwd: '/Users/mohammadkhalaf/Projects/Rettib',
+            updated_at: 1770532915205
+          },
+          {
+            workstream_id: 7,
+            session_id: '3d03d9ec-3a8b-418d-958c-53bcf8d25c78',
+            project_cwd: '/Users/mohammadkhalaf/Projects/Rettib',
+            updated_at: 1770541871928
+          }
+        ],
+        tasks: [
+          {
+            workstream_id: 4,
+            status: 'todo',
+            title: 'Draft outline for site (AI + security showcase)',
+            updated_at: 1770445067419
+          },
+          {
+            workstream_id: 6,
+            status: 'todo',
+            title: 'Occasional review',
+            updated_at: 1770445067419
+          },
+          {
+            workstream_id: 7,
+            status: 'todo',
+            title: 'Occasional review',
+            updated_at: 1770541854935
+          },
+          {
+            workstream_id: 8,
+            status: 'todo',
+            title: 'Occasional review',
+            updated_at: 1770445067419
+          },
+          {
+            workstream_id: 9,
+            status: 'todo',
+            title: 'Occasional review',
+            updated_at: 1770445067419
+          },
+          {
+            workstream_id: 10,
+            status: 'todo',
+            title: 'Occasional review',
+            updated_at: 1770445067419
+          }
+        ]
+      }
+
+      function groupBy(list, keyFn) {
+        const map = new Map()
+        list.forEach((item) => {
+          const key = keyFn(item)
+          if (!map.has(key)) {
+            map.set(key, [])
+          }
+          map.get(key).push(item)
+        })
+        return map
+      }
+
+      function shortId(value) {
+        return String(value || '').slice(0, 8)
+      }
+
+      function cleanText(value) {
+        if (!value) {
+          return ''
+        }
+
+        return String(value)
+          .replace(/<[^>]*>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      }
+
+      function shortText(value, max = 100) {
+        const text = cleanText(value)
+        if (text.length <= max) {
+          return text
+        }
+        return `${text.slice(0, max - 1)}...`
+      }
+
+      function isUsefulAction(value) {
+        const text = cleanText(value).toLowerCase()
+        if (!text) {
+          return false
+        }
+        if (text === 'tbd' || text === 'occasional review') {
+          return false
+        }
+        if (text.startsWith('none -')) {
+          return false
+        }
+        return true
+      }
+
+      function relativeTime(timestamp) {
+        if (!timestamp || Number.isNaN(timestamp)) {
+          return 'n/a'
+        }
+
+        const diff = Date.now() - Number(timestamp)
+        const abs = Math.abs(diff)
+        const minute = 60 * 1000
+        const hour = 60 * minute
+        const day = 24 * hour
+
+        if (abs < hour) {
+          return `${Math.max(1, Math.round(abs / minute))}m ago`
+        }
+
+        if (abs < day) {
+          return `${Math.max(1, Math.round(abs / hour))}h ago`
+        }
+
+        return `${Math.max(1, Math.round(abs / day))}d ago`
+      }
+
+      function timeLabel(timestamp) {
+        if (!timestamp) {
+          return 'n/a'
+        }
+
+        try {
+          return new Date(timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        } catch {
+          return 'n/a'
+        }
+      }
+
+      function maxTimestamp(values) {
+        const numeric = values.filter((value) => typeof value === 'number' && Number.isFinite(value))
+        if (numeric.length === 0) {
+          return null
+        }
+        return Math.max(...numeric)
+      }
+
+      function buildProjectsFromSeed(seed) {
+        const refsByWorkstream = groupBy(seed.chat_references, (item) => item.workstream_id)
+        const tasksByWorkstream = groupBy(seed.tasks, (item) => item.workstream_id)
+        const sessionByWorkstream = new Map(seed.chat_sessions.map((item) => [item.workstream_id, item]))
+        const focusIds = new Set([2, 1, 3, 4, 10])
+
+        return seed.workstreams.map((workstream) => {
+          const refs = refsByWorkstream.get(workstream.id) || []
+          const tasks = (tasksByWorkstream.get(workstream.id) || []).slice().sort((a, b) => b.updated_at - a.updated_at)
+          const storedSession = sessionByWorkstream.get(workstream.id) || null
+
+          const sessions = refs.map((ref) => {
+            const preview = cleanText(ref.last_user_message)
+            const ts = ref.chat_timestamp || ref.linked_at || workstream.updated_at
+            const label = cleanText(ref.conversation_title) || `Session ${shortId(ref.conversation_uuid)}`
+            const messages = []
+
+            if (preview) {
+              messages.push({ role: 'assistant', text: `Restored context from linked thread: ${label}`, ts: ts - 60000 })
+              messages.push({ role: 'user', text: preview, ts })
+            } else {
+              messages.push({ role: 'assistant', text: 'Thread linked, but no preview text is available yet.', ts })
+            }
+
+            return {
+              id: ref.conversation_uuid,
+              label,
+              updatedAt: ts,
+              messages
+            }
+          })
+
+          if (storedSession && !sessions.some((session) => session.id === storedSession.session_id)) {
+            sessions.unshift({
+              id: storedSession.session_id,
+              label: `Session ${shortId(storedSession.session_id)}`,
+              updatedAt: storedSession.updated_at,
+              messages: [
+                {
+                  role: 'assistant',
+                  text: 'This workstream has an active session id saved in local DB. Continue to rebuild context.',
+                  ts: storedSession.updated_at
+                }
+              ]
+            })
+          }
+
+          if (sessions.length === 0) {
+            sessions.push({
+              id: `new-${workstream.id}`,
+              label: 'Start thread',
+              updatedAt: workstream.updated_at,
+              messages: [
+                {
+                  role: 'assistant',
+                  text: 'No linked sessions yet. Start chatting and this project will retain session context.',
+                  ts: workstream.updated_at
+                }
+              ]
+            })
+          }
+
+          sessions.sort((a, b) => b.updatedAt - a.updatedAt)
+
+          const topTask = tasks.find((task) => task.status !== 'done') || tasks[0] || null
+          const topRef = refs[0] || null
+          const usefulAction = isUsefulAction(workstream.next_action)
+          const resumeUpdatedAt = maxTimestamp([
+            workstream.updated_at,
+            topTask ? topTask.updated_at : null,
+            topRef ? topRef.chat_timestamp || topRef.linked_at : null,
+            storedSession ? storedSession.updated_at : null
+          ])
+
+          const lastMove =
+            topRef && cleanText(topRef.last_user_message)
+              ? shortText(cleanText(topRef.last_user_message), 132)
+              : topTask
+                ? `Task noted: ${cleanText(topTask.title)}`
+                : 'No recent move captured.'
+
+          const blocker =
+            workstream.status === 'blocked'
+              ? 'Marked as blocked in tracker.'
+              : workstream.status === 'waiting'
+                ? 'Waiting state. Decision or input still needed.'
+                : 'No explicit blocker captured.'
+
+          const nextStep = usefulAction
+            ? cleanText(workstream.next_action)
+            : topTask
+              ? cleanText(topTask.title)
+              : topRef
+                ? 'Continue the latest linked session.'
+                : 'Start a new session and define one immediate next step.'
+
+          return {
+            id: workstream.id,
+            name: workstream.name,
+            priority: workstream.priority,
+            cadenceDays: workstream.target_cadence_days,
+            status: workstream.status,
+            nextActionRaw: workstream.next_action,
+            updatedAt: workstream.updated_at,
+            pinned: focusIds.has(workstream.id),
+            tasks,
+            sessionCwd: storedSession ? storedSession.project_cwd : null,
+            resume: {
+              lastMove,
+              blocker,
+              nextStep,
+              updatedAt: resumeUpdatedAt
+            },
+            sessions
+          }
+        })
+      }
+
+      const state = {
+        search: '',
+        mode: 'overview',
+        activeProjectId: null,
+        activeDetailTab: 'chat',
+        projects: buildProjectsFromSeed(dbSeed),
+        activeSessionByProject: {}
+      }
+
+      state.projects.forEach((project) => {
+        state.activeSessionByProject[project.id] = project.sessions[0].id
+      })
+
+      const focusList = document.querySelector('#focusList')
+      const allList = document.querySelector('#allList')
+      const focusCount = document.querySelector('#focusCount')
+      const searchInput = document.querySelector('#search')
+
+      const mainTitle = document.querySelector('#mainTitle')
+      const projectStatus = document.querySelector('#projectStatus')
+      const overviewBtn = document.querySelector('#overviewBtn')
+
+      const overviewView = document.querySelector('#overviewView')
+      const workstreamView = document.querySelector('#workstreamView')
+
+      const statTotal = document.querySelector('#statTotal')
+      const statFocus = document.querySelector('#statFocus')
+      const statActive = document.querySelector('#statActive')
+      const statSessions = document.querySelector('#statSessions')
+      const overviewGrid = document.querySelector('#overviewGrid')
+
+      const detailTabs = document.querySelectorAll('.detail-tab')
+      const chatPane = document.querySelector('#chatPane')
+      const contextPane = document.querySelector('#contextPane')
+      const tasksPane = document.querySelector('#tasksPane')
+      const notesPane = document.querySelector('#notesPane')
+
+      const contextLastMove = document.querySelector('#contextLastMove')
+      const contextBlocker = document.querySelector('#contextBlocker')
+      const contextNextStep = document.querySelector('#contextNextStep')
+      const contextSignals = document.querySelector('#contextSignals')
+      const contextMeta = document.querySelector('#contextMeta')
+
+      const sessionTabs = document.querySelector('#sessionTabs')
+      const chatList = document.querySelector('#chatList')
+      const composerForm = document.querySelector('#composerForm')
+      const composerInput = document.querySelector('#composerInput')
+
+      const tasksList = document.querySelector('#tasksList')
+      const noteNextAction = document.querySelector('#noteNextAction')
+      const noteSessionPath = document.querySelector('#noteSessionPath')
+      const noteTimestamp = document.querySelector('#noteTimestamp')
+
+      function getProject(projectId) {
+        return state.projects.find((project) => project.id === projectId)
+      }
+
+      function getActiveProject() {
+        if (state.activeProjectId === null) {
+          return null
+        }
+        return getProject(state.activeProjectId)
+      }
+
+      function getActiveSession(project) {
+        const desiredSessionId = state.activeSessionByProject[project.id]
+        return project.sessions.find((session) => session.id === desiredSessionId) || project.sessions[0]
+      }
+
+      function openWorkstream(projectId) {
+        state.activeProjectId = projectId
+        state.mode = 'workstream'
+        state.activeDetailTab = 'chat'
+        render()
+      }
+
+      function goOverview() {
+        state.mode = 'overview'
+        state.activeProjectId = null
+        render()
+      }
+
+      function statusClass(status) {
+        return `status-pill ${status}`
+      }
+
+      function renderProjectCard(project) {
+        const selected = state.mode === 'workstream' && state.activeProjectId === project.id
+
+        const item = document.createElement('li')
+        item.className = `project-item${selected ? ' active' : ''}`
+
+        const line = document.createElement('div')
+        line.className = 'project-line'
+
+        const name = document.createElement('div')
+        name.className = 'project-name'
+        name.textContent = project.name
+
+        const pin = document.createElement('button')
+        pin.type = 'button'
+        pin.className = `pin-btn${project.pinned ? ' pinned' : ''}`
+        pin.textContent = project.pinned ? 'Focus' : 'Pin'
+        pin.addEventListener('click', (event) => {
+          event.stopPropagation()
+
+          if (!project.pinned && state.projects.filter((itemProject) => itemProject.pinned).length >= 5) {
+            return
+          }
+
+          project.pinned = !project.pinned
+          renderSidebar()
+          renderOverview()
+        })
+
+        line.append(name, pin)
+
+        const meta = document.createElement('div')
+        meta.className = 'project-meta'
+        const dot = document.createElement('span')
+        dot.className = `status-dot ${project.status}`
+        const metaText = document.createElement('span')
+        metaText.textContent = `P${project.priority} ${project.status} - ${relativeTime(project.resume.updatedAt)}`
+        meta.append(dot, metaText)
+
+        const checkpoint = document.createElement('div')
+        checkpoint.className = 'project-checkpoint'
+        checkpoint.textContent = shortText(project.resume.nextStep, 112)
+
+        item.append(line, meta, checkpoint)
+
+        item.addEventListener('click', () => {
+          openWorkstream(project.id)
+        })
+
+        return item
+      }
+
+      function renderSidebar() {
+        const query = state.search.trim().toLowerCase()
+        const matches = (project) => !query || project.name.toLowerCase().includes(query)
+
+        const pinned = state.projects.filter((project) => project.pinned && matches(project))
+        const others = state.projects.filter((project) => !project.pinned && matches(project))
+
+        focusList.replaceChildren(...pinned.map((project) => renderProjectCard(project)))
+        allList.replaceChildren(...others.map((project) => renderProjectCard(project)))
+
+        if (pinned.length === 0) {
+          const empty = document.createElement('p')
+          empty.className = 'empty-state'
+          empty.textContent = query ? 'No focus projects in search results.' : 'Pin projects to keep them in focus.'
+          focusList.append(empty)
+        }
+
+        if (others.length === 0) {
+          const empty = document.createElement('p')
+          empty.className = 'empty-state'
+          empty.textContent = query ? 'No projects match this search.' : 'All projects are currently pinned.'
+          allList.append(empty)
+        }
+
+        focusCount.textContent = `${state.projects.filter((project) => project.pinned).length}/5`
+      }
+
+      function renderHeader() {
+        if (state.mode === 'overview') {
+          mainTitle.textContent = 'Workstream Overview'
+          overviewBtn.classList.add('hidden')
+          projectStatus.classList.add('hidden')
+          return
+        }
+
+        const project = getActiveProject()
+        if (!project) {
+          mainTitle.textContent = 'Workstream Overview'
+          overviewBtn.classList.add('hidden')
+          projectStatus.classList.add('hidden')
+          return
+        }
+
+        mainTitle.textContent = project.name
+        overviewBtn.classList.remove('hidden')
+        projectStatus.classList.remove('hidden')
+        projectStatus.textContent = project.status
+        projectStatus.className = `${statusClass(project.status)}`
+      }
+
+      function renderOverview() {
+        const total = state.projects.length
+        const focus = state.projects.filter((project) => project.pinned).length
+        const active = state.projects.filter((project) => project.status === 'active').length
+        const linkedSessions = state.projects.reduce((sum, project) => sum + project.sessions.length, 0)
+
+        statTotal.textContent = String(total)
+        statFocus.textContent = String(focus)
+        statActive.textContent = String(active)
+        statSessions.textContent = String(linkedSessions)
+
+        const sorted = state.projects
+          .slice()
+          .sort((a, b) => b.priority - a.priority || (b.resume.updatedAt || 0) - (a.resume.updatedAt || 0))
+
+        overviewGrid.replaceChildren(
+          ...sorted.map((project) => {
+            const card = document.createElement('button')
+            card.type = 'button'
+            card.className = 'overview-card'
+
+            const head = document.createElement('div')
+            head.className = 'overview-card-head'
+
+            const name = document.createElement('div')
+            name.className = 'overview-card-name'
+            name.textContent = project.name
+
+            const meta = document.createElement('div')
+            meta.className = 'overview-card-meta'
+            meta.textContent = `P${project.priority} ${project.status}`
+
+            head.append(name, meta)
+
+            const next = document.createElement('div')
+            next.className = 'overview-card-next'
+            next.textContent = project.resume.nextStep
+
+            const foot = document.createElement('div')
+            foot.className = 'overview-card-foot'
+            foot.textContent = `Updated ${relativeTime(project.resume.updatedAt)} - ${project.sessions.length} session(s)`
+
+            card.append(head, next, foot)
+
+            card.addEventListener('click', () => {
+              openWorkstream(project.id)
+            })
+
+            return card
+          })
+        )
+      }
+
+      function renderDetailTabs() {
+        detailTabs.forEach((button) => {
+          button.classList.toggle('active', button.dataset.tab === state.activeDetailTab)
+        })
+
+        chatPane.classList.toggle('hidden', state.activeDetailTab !== 'chat')
+        contextPane.classList.toggle('hidden', state.activeDetailTab !== 'context')
+        tasksPane.classList.toggle('hidden', state.activeDetailTab !== 'tasks')
+        notesPane.classList.toggle('hidden', state.activeDetailTab !== 'notes')
+      }
+
+      function renderSessions(project) {
+        const activeSession = getActiveSession(project)
+        state.activeSessionByProject[project.id] = activeSession.id
+
+        sessionTabs.replaceChildren(
+          ...project.sessions.map((session) => {
+            const button = document.createElement('button')
+            button.type = 'button'
+            button.className = `session-tab${session.id === activeSession.id ? ' active' : ''}`
+            button.textContent = `${session.label} - ${relativeTime(session.updatedAt)}`
+            button.addEventListener('click', () => {
+              state.activeSessionByProject[project.id] = session.id
+              renderSessions(project)
+              renderChat(project)
+            })
+            return button
+          })
+        )
+      }
+
+      function renderChat(project) {
+        const session = getActiveSession(project)
+
+        chatList.replaceChildren(
+          ...session.messages.map((message) => {
+            const bubble = document.createElement('div')
+            bubble.className = `msg ${message.role}`
+
+            const content = document.createElement('div')
+            content.textContent = message.text
+
+            const meta = document.createElement('div')
+            meta.className = 'msg-meta'
+            meta.textContent = `${message.role === 'assistant' ? 'Assistant' : 'You'} - ${timeLabel(message.ts)}`
+
+            bubble.append(content, meta)
+            return bubble
+          })
+        )
+
+        chatList.scrollTop = chatList.scrollHeight
+      }
+
+      function renderContext(project) {
+        contextLastMove.textContent = project.resume.lastMove
+        contextBlocker.textContent = project.resume.blocker
+        contextNextStep.textContent = project.resume.nextStep
+
+        contextSignals.replaceChildren()
+        ;[
+          `Priority P${project.priority}`,
+          `Cadence ${project.cadenceDays}d`,
+          `Sessions ${project.sessions.length}`,
+          `Status ${project.status}`
+        ].forEach((label) => {
+          const chip = document.createElement('span')
+          chip.className = 'chip'
+          chip.textContent = label
+          contextSignals.append(chip)
+        })
+
+        contextMeta.textContent = project.sessionCwd
+          ? `Updated ${relativeTime(project.resume.updatedAt)} - cwd ${project.sessionCwd}`
+          : `Updated ${relativeTime(project.resume.updatedAt)} - no stored cwd`
+      }
+
+      function renderTasks(project) {
+        const rows = project.tasks.length > 0 ? project.tasks : [{ status: 'none', title: 'No tasks captured yet.' }]
+
+        tasksList.replaceChildren(
+          ...rows.map((task) => {
+            const row = document.createElement('li')
+            row.className = 'task-item'
+
+            const status = document.createElement('span')
+            status.className = 'task-status'
+            status.textContent = task.status
+
+            const text = document.createElement('span')
+            text.className = 'task-text'
+            text.textContent = task.title
+
+            row.append(status, text)
+            return row
+          })
+        )
+      }
+
+      function renderNotes(project) {
+        noteNextAction.textContent = `next_action: ${cleanText(project.nextActionRaw) || 'none'}`
+        noteSessionPath.textContent = `session cwd: ${project.sessionCwd || 'not stored'}`
+        noteTimestamp.textContent = `last updated: ${relativeTime(project.resume.updatedAt)}`
+      }
+
+      function renderWorkstreamView() {
+        const project = getActiveProject()
+        if (!project) {
+          state.mode = 'overview'
+          render()
+          return
+        }
+
+        renderDetailTabs()
+        renderSessions(project)
+        renderChat(project)
+        renderContext(project)
+        renderTasks(project)
+        renderNotes(project)
+      }
+
+      function renderMode() {
+        const isOverview = state.mode === 'overview'
+        overviewView.classList.toggle('hidden', !isOverview)
+        workstreamView.classList.toggle('hidden', isOverview)
+      }
+
+      function render() {
+        renderSidebar()
+        renderHeader()
+        renderMode()
+
+        if (state.mode === 'overview') {
+          renderOverview()
+        } else {
+          renderWorkstreamView()
+        }
+      }
+
+      searchInput.addEventListener('input', (event) => {
+        state.search = event.target.value || ''
+        renderSidebar()
+      })
+
+      overviewBtn.addEventListener('click', () => {
+        goOverview()
+      })
+
+      detailTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          state.activeDetailTab = button.dataset.tab || 'chat'
+          renderDetailTabs()
+        })
+      })
+
+      composerForm.addEventListener('submit', (event) => {
+        event.preventDefault()
+
+        if (state.mode !== 'workstream') {
+          return
+        }
+
+        const text = composerInput.value.trim()
+        if (!text) {
+          return
+        }
+
+        const project = getActiveProject()
+        if (!project) {
+          return
+        }
+
+        const session = getActiveSession(project)
+        const now = Date.now()
+
+        session.messages.push({ role: 'user', text, ts: now })
+        session.updatedAt = now
+        project.resume.lastMove = shortText(text, 132)
+        project.resume.nextStep = 'Continue this thread and lock one concrete next step.'
+        project.resume.updatedAt = now
+        composerInput.value = ''
+
+        setTimeout(() => {
+          session.messages.push({
+            role: 'assistant',
+            text: 'Captured. I can summarize this in Context or keep expanding the thread.',
+            ts: Date.now()
+          })
+          session.updatedAt = Date.now()
+          render()
+        }, 380)
+
+        render()
+      })
+
+      render()
+    </script>
+  </body>
+</html>
