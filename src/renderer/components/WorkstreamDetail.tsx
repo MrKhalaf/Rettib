@@ -204,6 +204,34 @@ function normalizeSessionLabel(rawLabel: string | null | undefined, fallbackSess
   return 'New topic'
 }
 
+function deriveTopicLabel(rawText: string | null | undefined, maxLength = 28): string | null {
+  if (!rawText) {
+    return null
+  }
+
+  const compacted = rawText.replace(/\s+/g, ' ').trim()
+  if (!compacted || compacted.toLowerCase() === 'no prompt') {
+    return null
+  }
+
+  const sentenceBoundary = compacted.search(/[.?!](?:\s|$)/)
+  const sentence = sentenceBoundary > 0 ? compacted.slice(0, sentenceBoundary) : compacted
+  const cleaned = sentence.replace(/^["'`([{]+|["'`)\]}]+$/g, '').trim()
+  if (!cleaned) {
+    return null
+  }
+
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}...` : cleaned
+}
+
+function labelsMatch(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (!left || !right) {
+    return false
+  }
+
+  return left.trim().toLowerCase() === right.trim().toLowerCase()
+}
+
 function createNewTopicTab(label = 'New topic'): ChatTopicTab {
   return {
     id: createChatTabId('topic'),
@@ -214,7 +242,11 @@ function createNewTopicTab(label = 'New topic'): ChatTopicTab {
   }
 }
 
-function buildLinkedChatTabs(chats: ChatReference[], closedConversationIds: Set<string>): ChatTopicTab[] {
+function buildLinkedChatTabs(
+  chats: ChatReference[],
+  closedConversationIds: Set<string>,
+  workstreamName: string | null | undefined
+): ChatTopicTab[] {
   const latestByConversation = new Map<string, ChatReference>()
 
   for (const chat of chats) {
@@ -231,15 +263,37 @@ function buildLinkedChatTabs(chats: ChatReference[], closedConversationIds: Set<
     }
   }
 
-  return Array.from(latestByConversation.values())
-    .sort((a, b) => (b.chat_timestamp ?? b.linked_at) - (a.chat_timestamp ?? a.linked_at))
-    .map((chat) => ({
+  const sortedChats = Array.from(latestByConversation.values()).sort(
+    (a, b) => (b.chat_timestamp ?? b.linked_at) - (a.chat_timestamp ?? a.linked_at)
+  )
+  const titleCounts = new Map<string, number>()
+
+  for (const chat of sortedChats) {
+    const title = deriveTopicLabel(chat.conversation_title)
+    if (!title) {
+      continue
+    }
+
+    const normalized = title.toLowerCase()
+    titleCounts.set(normalized, (titleCounts.get(normalized) ?? 0) + 1)
+  }
+
+  return sortedChats.map((chat) => {
+    const titleLabel = deriveTopicLabel(chat.conversation_title)
+    const promptLabel = deriveTopicLabel(chat.last_user_message)
+    const isDuplicateTitle = titleLabel ? (titleCounts.get(titleLabel.toLowerCase()) ?? 0) > 1 : false
+    const isWorkstreamTitle = labelsMatch(titleLabel, workstreamName)
+    const prefersPrompt = Boolean(promptLabel && (isDuplicateTitle || isWorkstreamTitle))
+    const preferredLabel = prefersPrompt ? promptLabel : titleLabel ?? promptLabel
+
+    return {
       id: `linked-${chat.conversation_uuid}`,
-      label: normalizeSessionLabel(chat.conversation_title, chat.conversation_uuid),
+      label: normalizeSessionLabel(preferredLabel, chat.conversation_uuid),
       resumeSessionId: chat.conversation_uuid,
       conversationUuid: chat.conversation_uuid,
       kind: 'linked' as const
-    }))
+    }
+  })
 }
 
 function buildHistoryMessages(messages: ClaudeConversationPreviewMessage[]): LiveChatMessage[] {
@@ -559,7 +613,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       return
     }
 
-    const linkedTabs = buildLinkedChatTabs(detail.chats, new Set(closedConversationIds))
+    const linkedTabs = buildLinkedChatTabs(detail.chats, new Set(closedConversationIds), detail.workstream.name)
 
     setChatTabs((previous) => {
       const localTabs = previous.filter((tab) => tab.kind !== 'linked')
@@ -729,7 +783,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     return () => {
       cancelled = true
     }
-  }, [activeChatTabId, activeChatConversationId, activeChatMessages.length, conversationPreviews])
+  }, [activeChatTabId, activeChatConversationId, activeChatMessages.length])
 
   useEffect(() => {
     const unsubscribe = chatApi.onStreamEvent((streamEvent) => {
