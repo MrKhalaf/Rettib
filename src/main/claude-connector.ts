@@ -88,6 +88,43 @@ function listSessionsIndexFiles(rootPath: string): string[] {
   return indexFiles
 }
 
+function findSessionTranscriptFile(rootPath: string, sessionId: string): string | null {
+  if (!rootPath || !sessionId || !fs.existsSync(rootPath)) {
+    return null
+  }
+
+  const transcriptFileName = `${sessionId}.jsonl`
+  const stat = fs.statSync(rootPath)
+  if (stat.isFile()) {
+    return path.basename(rootPath) === transcriptFileName ? rootPath : null
+  }
+
+  const queue: string[] = [rootPath]
+  while (queue.length > 0) {
+    const current = queue.pop() as string
+    let entries: fs.Dirent[]
+
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      const resolved = path.join(current, entry.name)
+      if (entry.isFile() && entry.name === transcriptFileName) {
+        return resolved
+      }
+
+      if (entry.isDirectory()) {
+        queue.push(resolved)
+      }
+    }
+  }
+
+  return null
+}
+
 function extractUserText(content: unknown): string | null {
   if (typeof content === 'string') {
     const text = content.trim()
@@ -426,11 +463,15 @@ export class ClaudeConnector {
     }
 
     const target = entriesBySession.get(trimmedUuid)
-    if (!target?.fullPath) {
+    const indexedFilePath = target?.fullPath
+    const transcriptFilePath =
+      indexedFilePath && fs.existsSync(indexedFilePath) ? indexedFilePath : findSessionTranscriptFile(this.projectsPath, trimmedUuid)
+
+    if (!transcriptFilePath) {
       return []
     }
 
-    const allMessages = extractConversationMessagesFromSessionFile(target.fullPath)
+    const allMessages = extractConversationMessagesFromSessionFile(transcriptFilePath)
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(20, Math.floor(limit))) : 4
     return allMessages.slice(-safeLimit)
   }
