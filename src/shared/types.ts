@@ -100,6 +100,7 @@ export interface SendChatMessageInput {
   resume_session_id?: string | null
   allow_workstream_session_fallback?: boolean
   model?: string | null
+  permission_mode?: ClaudePermissionMode | null
 }
 
 export interface SendChatMessageResult {
@@ -111,7 +112,19 @@ export interface SendChatMessageResult {
   exit_code: number | null
 }
 
-export type ChatStreamEventType = 'init' | 'token' | 'assistant' | 'tool_use' | 'result' | 'error' | 'done'
+export type ClaudePermissionMode = 'acceptEdits' | 'bypassPermissions' | 'default' | 'delegate' | 'dontAsk' | 'plan'
+
+export type ChatStreamEventType =
+  | 'init'
+  | 'token'
+  | 'assistant'
+  | 'tool_use'
+  | 'tool_result'
+  | 'question'
+  | 'permission'
+  | 'result'
+  | 'error'
+  | 'done'
 
 export interface ChatStreamEvent {
   stream_id: string

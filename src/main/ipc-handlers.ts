@@ -132,6 +132,8 @@ function resolveChatCwd(...candidates: Array<string | null | undefined>): string
   return os.homedir()
 }
 
+const CLAUDE_PERMISSION_MODES = new Set(['acceptEdits', 'bypassPermissions', 'default', 'delegate', 'dontAsk', 'plan'])
+
 function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
   const payload = ensureObject(data, 'chat payload')
   const workstreamId = ensureNumber(payload.workstream_id, 'workstream id')
@@ -159,6 +161,18 @@ function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
       ? true
       : allowWorkstreamSessionFallbackRaw
   const model = payload.model === undefined || payload.model === null ? null : ensureString(payload.model, 'model').trim() || null
+  const permissionModeRaw =
+    payload.permission_mode === undefined || payload.permission_mode === null
+      ? null
+      : ensureString(payload.permission_mode, 'permission_mode').trim() || null
+
+  if (permissionModeRaw && !CLAUDE_PERMISSION_MODES.has(permissionModeRaw)) {
+    throw new Error(
+      `permission_mode must be one of: ${Array.from(CLAUDE_PERMISSION_MODES)
+        .sort()
+        .join(', ')}`
+    )
+  }
 
   return {
     workstream_id: workstreamId,
@@ -166,7 +180,8 @@ function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
     cwd,
     resume_session_id: resumeSessionId,
     allow_workstream_session_fallback: allowWorkstreamSessionFallback,
-    model
+    model,
+    permission_mode: permissionModeRaw as SendChatMessageInput['permission_mode']
   }
 }
 
@@ -409,7 +424,8 @@ export function registerIpcHandlers(): void {
       message: payload.message,
       cwd,
       resume_session_id: resumeSessionId,
-      model: payload.model ?? null
+      model: payload.model ?? null,
+      permission_mode: payload.permission_mode ?? null
     })
 
     const sessionId = result.session_id ?? resumeSessionId
