@@ -903,6 +903,12 @@ select:focus {
   align-items: flex-start;
 }
 
+.message-system {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
 .assistant-avatar {
   width: 28px;
   height: 28px;
@@ -919,6 +925,11 @@ select:focus {
   margin-top: 2px;
 }
 
+.assistant-avatar.system {
+  background: #2a2d38;
+  color: #c4c9d8;
+}
+
 .message-content {
   flex: 1;
   min-width: 0;
@@ -931,6 +942,11 @@ select:focus {
   padding: 14px 18px;
   font-size: 14px;
   line-height: 1.65;
+}
+
+.message-bubble-system {
+  background: #141923;
+  border-style: dashed;
 }
 
 .message-bubble p {
@@ -1023,11 +1039,16 @@ select:focus {
   white-space: pre;
 }
 
+.tool-use-group {
+  margin: 8px 0;
+}
+
 .tool-use {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  margin: 8px 0;
+  margin: 0;
   padding: 7px 12px;
   background: var(--tool-bg);
   border: 1px solid var(--tool-border);
@@ -1035,6 +1056,11 @@ select:focus {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tool-text);
+}
+
+.tool-use-error {
+  border-color: rgba(196, 84, 84, 0.4);
+  background: rgba(196, 84, 84, 0.08);
 }
 
 .tool-icon {
@@ -1074,6 +1100,16 @@ select:focus {
   color: #c1c1c8;
 }
 
+.tool-icon.question {
+  background: rgba(214, 158, 53, 0.15);
+  color: #e9be75;
+}
+
+.tool-icon.permission {
+  background: rgba(196, 84, 84, 0.18);
+  color: #f0b2b2;
+}
+
 .tool-name {
   color: var(--text-secondary);
   font-weight: 500;
@@ -1084,6 +1120,12 @@ select:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool-detail {
+  color: var(--text-tertiary);
+  width: 100%;
+  padding-left: 28px;
 }
 
 .tool-status {
@@ -1103,6 +1145,23 @@ select:focus {
 .tool-status span {
   font-size: 10px;
   color: var(--text-tertiary);
+}
+
+.tool-output {
+  margin: 6px 0 0 28px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: #11141c;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.tool-output-error {
+  border-color: rgba(196, 84, 84, 0.4);
+  background: rgba(196, 84, 84, 0.08);
 }
 
 .message-time {
@@ -1396,6 +1455,65 @@ select:focus {
 .input-wrapper:focus-within {
   border-color: var(--accent-dim);
   box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-sm);
+}
+
+.pending-actions {
+  max-width: 920px;
+  margin: 8px auto 0;
+  display: grid;
+  gap: 8px;
+}
+
+.pending-card {
+  border: 1px solid var(--border-subtle);
+  background: #131722;
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+}
+
+.pending-card-warning {
+  border-color: rgba(196, 84, 84, 0.45);
+  background: rgba(196, 84, 84, 0.1);
+}
+
+.pending-title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.pending-text {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+}
+
+.pending-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pending-btn {
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: #1a1f2d;
+  color: var(--text-primary);
+  padding: 0.3rem 0.55rem;
+  font-size: 11px;
+}
+
+.pending-btn-primary {
+  border-color: var(--accent-dim);
+  background: var(--accent);
+  color: #0d0d0f;
+  font-weight: 600;
 }
 
 .input-textarea {

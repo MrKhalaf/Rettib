@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 
-import type { ChatReference, ChatStreamEvent, ClaudeConversationPreviewMessage } from '../../shared/types'
+import type { ChatReference, ChatStreamEvent, ClaudeConversationPreviewMessage, ClaudePermissionMode } from '../../shared/types'
 import { appApi } from '../api/app'
 import { chatApi } from '../api/chat'
 import {
@@ -23,15 +23,40 @@ interface Props {
 
 type DetailTab = 'info' | 'tasks' | 'chat' | 'progress' | 'notes'
 
-type ToolUseKind = 'read' | 'edit' | 'bash' | 'grep' | 'tool'
+type ToolUseKind = 'read' | 'edit' | 'bash' | 'grep' | 'question' | 'permission' | 'tool'
 const SUGGESTION_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
 
 interface ToolUseEntry {
   id: string
+  toolUseId: string | null
   kind: ToolUseKind
   name: string
   target: string
   status: 'running' | 'done'
+  detail?: string | null
+  output?: string | null
+  error?: boolean
+}
+
+interface ToolResultSummary {
+  toolUseId: string | null
+  text: string | null
+  isError: boolean
+}
+
+interface QuestionOptionSummary {
+  label: string
+  description: string | null
+}
+
+interface QuestionSummary {
+  text: string | null
+  options: QuestionOptionSummary[]
+}
+
+interface PermissionSummary {
+  message: string
+  commands: string[]
 }
 
 interface LiveChatMessage {
@@ -113,6 +138,19 @@ function getChatInitCwd(streamEvent: ChatStreamEvent): string | null {
   return typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function truncateForUi(value: string, maxLength = 260): string {
+  const compacted = value.replace(/\s+/g, ' ').trim()
+  if (!compacted) {
+    return ''
+  }
+
+  return compacted.length > maxLength ? `${compacted.slice(0, maxLength)}...` : compacted
+}
+
 function createChatMessageId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -123,6 +161,14 @@ function createChatTabId(prefix: string): string {
 
 function inferToolKind(toolName: string): ToolUseKind {
   const normalized = toolName.toLowerCase()
+
+  if (normalized.includes('askuserquestion') || normalized.includes('question')) {
+    return 'question'
+  }
+
+  if (normalized.includes('permission')) {
+    return 'permission'
+  }
 
   if (normalized.includes('read')) {
     return 'read'
@@ -154,7 +200,15 @@ function summarizeToolTarget(input: unknown): string {
   }
 
   const record = input as Record<string, unknown>
-  const knownKeys = ['path', 'file', 'files', 'command', 'pattern', 'query', 'url', 'repo', 'target']
+  const questions = record.questions
+  if (Array.isArray(questions) && questions.length > 0) {
+    const firstQuestion = asRecord(questions[0])?.question
+    if (typeof firstQuestion === 'string' && firstQuestion.trim()) {
+      return `question: ${truncateForUi(firstQuestion, 120)}`
+    }
+  }
+
+  const knownKeys = ['path', 'file', 'files', 'command', 'description', 'pattern', 'query', 'url', 'repo', 'target']
 
   for (const key of knownKeys) {
     const value = record[key]
@@ -179,16 +233,119 @@ function summarizeToolTarget(input: unknown): string {
 }
 
 function buildToolUseEntry(data: unknown): ToolUseEntry {
-  const record = data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>) : {}
+  const record = asRecord(data) ?? {}
   const name = typeof record.name === 'string' && record.name.trim() ? record.name.trim() : 'Tool'
-  const target = summarizeToolTarget(record.input)
+  const input = record.input
+  const inputRecord = asRecord(input)
+  const target = summarizeToolTarget(input)
+  const description = typeof inputRecord?.description === 'string' ? truncateForUi(inputRecord.description, 140) : null
 
   return {
     id: createChatMessageId('tool'),
+    toolUseId: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : null,
     kind: inferToolKind(name),
     name,
     target,
-    status: 'running'
+    status: 'running',
+    detail: description,
+    output: null,
+    error: false
+  }
+}
+
+function extractToolResultSummary(data: unknown): ToolResultSummary | null {
+  const record = asRecord(data)
+  if (!record) {
+    return null
+  }
+
+  const text = typeof record.text === 'string' ? record.text : null
+  const stdout = typeof record.stdout === 'string' ? record.stdout : null
+  const stderr = typeof record.stderr === 'string' ? record.stderr : null
+  const mergedText = [text, stdout, stderr]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join('\n')
+
+  return {
+    toolUseId: typeof record.tool_use_id === 'string' && record.tool_use_id.trim() ? record.tool_use_id.trim() : null,
+    text: mergedText ? mergedText.slice(0, 1200) : null,
+    isError: record.is_error === true
+  }
+}
+
+function extractQuestionSummary(data: unknown): QuestionSummary | null {
+  const record = asRecord(data)
+  if (!record) {
+    return null
+  }
+
+  const input = asRecord(record.input)
+  const questionRows = Array.isArray(input?.questions) ? input.questions : []
+  if (questionRows.length === 0) {
+    return null
+  }
+
+  const firstQuestion = asRecord(questionRows[0])
+  const text = typeof firstQuestion?.question === 'string' ? firstQuestion.question.trim() : ''
+  const options = Array.isArray(firstQuestion?.options)
+    ? firstQuestion.options
+        .map((entry) => {
+          const option = asRecord(entry)
+          const label = option && typeof option.label === 'string' ? option.label.trim() : ''
+          const description = option && typeof option.description === 'string' ? option.description.trim() : ''
+          return {
+            label,
+            description: description || null
+          }
+        })
+        .filter((option) => option.label.length > 0)
+    : []
+
+  return {
+    text: text || null,
+    options
+  }
+}
+
+function extractPermissionSummary(data: unknown): PermissionSummary | null {
+  const record = asRecord(data)
+  if (!record) {
+    return null
+  }
+
+  const denials = Array.isArray(record.denials) ? record.denials : []
+  if (denials.length === 0) {
+    return null
+  }
+
+  const commands: string[] = []
+  const lines = denials
+    .map((entry) => {
+      const denial = asRecord(entry)
+      if (!denial) {
+        return null
+      }
+
+      const toolName =
+        typeof denial.tool_name === 'string' && denial.tool_name.trim().length > 0 ? denial.tool_name.trim() : 'Tool'
+      const input = asRecord(denial.tool_input)
+      const command = typeof input?.command === 'string' ? input.command.trim() : ''
+      const description = typeof input?.description === 'string' ? input.description.trim() : ''
+      const detail = command || description || 'permission requested'
+      if (command) {
+        commands.push(command)
+      }
+      return `${toolName}: ${truncateForUi(detail, 180)}`
+    })
+    .filter((line): line is string => Boolean(line))
+
+  if (lines.length === 0) {
+    return null
+  }
+
+  return {
+    message: `Permission required for:\n- ${lines.join('\n- ')}`,
+    commands
   }
 }
 
@@ -327,6 +484,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const [chatSessionId, setChatSessionId] = useState<string | null>(null)
   const [chatProjectCwd, setChatProjectCwd] = useState<string | null>(null)
   const [chatSendErrorsByTab, setChatSendErrorsByTab] = useState<Record<string, string | null>>({})
+  const [pendingQuestionsByTab, setPendingQuestionsByTab] = useState<Record<string, QuestionSummary | null>>({})
+  const [pendingPermissionsByTab, setPendingPermissionsByTab] = useState<Record<string, PermissionSummary | null>>({})
 
   const [chatTabs, setChatTabs] = useState<ChatTopicTab[]>([])
   const [activeChatTabId, setActiveChatTabId] = useState<string | null>(null)
@@ -440,6 +599,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const isActiveChatHistoryLoading = activeChatMessages.length === 0 && activeConversationPreview?.status === 'loading'
   const activeChatHistoryError = activeChatMessages.length === 0 && activeConversationPreview?.status === 'error' ? activeConversationPreview.error : null
   const activeChatSendError = activeChatTabId ? (chatSendErrorsByTab[activeChatTabId] ?? null) : null
+  const activePendingQuestion = activeChatTabId ? (pendingQuestionsByTab[activeChatTabId] ?? null) : null
+  const activePendingPermission = activeChatTabId ? (pendingPermissionsByTab[activeChatTabId] ?? null) : null
   const activeTabLinkedChats = useMemo(() => {
     if (!detail || !activeChatConversationId) {
       return []
@@ -478,6 +639,75 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       return {
         ...previous,
         [tabId]: error
+      }
+    })
+  }
+
+  function appendSystemMessage(tabId: string, text: string, error = false) {
+    const compact = text.trim()
+    if (!compact) {
+      return
+    }
+
+    setChatMessagesByTab((previous) => ({
+      ...previous,
+      [tabId]: [
+        ...(previous[tabId] ?? []),
+        {
+          id: createChatMessageId('system'),
+          role: 'system',
+          text: compact,
+          error,
+          createdAt: Date.now()
+        }
+      ]
+    }))
+  }
+
+  function setPendingQuestionForTab(tabId: string, question: QuestionSummary | null) {
+    setPendingQuestionsByTab((previous) => {
+      const current = previous[tabId] ?? null
+      if (current === question) {
+        return previous
+      }
+
+      if (question === null) {
+        if (!(tabId in previous)) {
+          return previous
+        }
+
+        const next = { ...previous }
+        delete next[tabId]
+        return next
+      }
+
+      return {
+        ...previous,
+        [tabId]: question
+      }
+    })
+  }
+
+  function setPendingPermissionForTab(tabId: string, permission: PermissionSummary | null) {
+    setPendingPermissionsByTab((previous) => {
+      const current = previous[tabId] ?? null
+      if (current === permission) {
+        return previous
+      }
+
+      if (permission === null) {
+        if (!(tabId in previous)) {
+          return previous
+        }
+
+        const next = { ...previous }
+        delete next[tabId]
+        return next
+      }
+
+      return {
+        ...previous,
+        [tabId]: permission
       }
     })
   }
@@ -578,6 +808,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     setChatMessagesByTab({})
     setChatInput('')
     setChatSendErrorsByTab({})
+    setPendingQuestionsByTab({})
+    setPendingPermissionsByTab({})
     setIsSendingChat(false)
     setActiveStreamId(null)
     setChatTabs([])
@@ -689,6 +921,16 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     })
 
     setChatSendErrorsByTab((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
+
+    setPendingQuestionsByTab((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
+
+    setPendingPermissionsByTab((previous) => {
       const next = pruneRecordByTab(previous)
       return hasSameKeys(previous, next) ? previous : next
     })
@@ -835,12 +1077,99 @@ export function WorkstreamDetail({ workstreamId }: Props) {
               message.id === assistantId
                 ? {
                     ...message,
-                    toolUses: [...(message.toolUses ?? []), toolUse]
+                    toolUses:
+                      toolUse.toolUseId && (message.toolUses ?? []).some((entry) => entry.toolUseId === toolUse.toolUseId)
+                        ? (message.toolUses ?? []).map((entry) =>
+                            entry.toolUseId === toolUse.toolUseId ? { ...entry, ...toolUse, status: entry.status } : entry
+                          )
+                        : [...(message.toolUses ?? []), toolUse]
                   }
                 : message
             )
           }
         })
+      }
+
+      if (streamEvent.type === 'tool_result') {
+        const summary = extractToolResultSummary(streamEvent.data)
+        if (summary) {
+          let matchedToolName: string | null = null
+          let matchedToolTarget: string | null = null
+
+          if (activeAssistantMessageIdRef.current) {
+            const assistantId = activeAssistantMessageIdRef.current
+            setChatMessagesByTab((previous) => {
+              const messages = previous[targetTabId]
+              if (!messages || messages.length === 0) {
+                return previous
+              }
+
+              let didUpdate = false
+              const nextMessages = messages.map((message) => {
+                if (message.id !== assistantId || !message.toolUses || message.toolUses.length === 0) {
+                  return message
+                }
+
+                const nextToolUses: ToolUseEntry[] = message.toolUses.map((toolUse): ToolUseEntry => {
+                  const matchesById = Boolean(summary.toolUseId && toolUse.toolUseId === summary.toolUseId)
+                  if (!matchesById) {
+                    return toolUse
+                  }
+
+                  didUpdate = true
+                  matchedToolName = toolUse.name
+                  matchedToolTarget = toolUse.target
+                  return {
+                    ...toolUse,
+                    status: 'done' as const,
+                    output: summary.text ?? toolUse.output ?? null,
+                    error: summary.isError
+                  }
+                })
+
+                return didUpdate ? { ...message, toolUses: nextToolUses } : message
+              })
+
+              if (!didUpdate) {
+                return previous
+              }
+
+              return {
+                ...previous,
+                [targetTabId]: nextMessages
+              }
+            })
+          }
+
+          if (summary.text) {
+            const header =
+              matchedToolName && matchedToolTarget ? `${matchedToolName} (${matchedToolTarget})` : 'Tool output'
+            appendSystemMessage(targetTabId, `${header}\n${summary.text}`, summary.isError)
+          }
+
+          if (summary.isError) {
+            setChatErrorForTab(targetTabId, summary.text ?? 'Tool execution returned an error')
+          }
+        }
+      }
+
+      if (streamEvent.type === 'question') {
+        const question = extractQuestionSummary(streamEvent.data)
+        if (question?.text) {
+          const optionsText = question.options.length > 0 ? `\nOptions: ${question.options.map((option) => option.label).join(' | ')}` : ''
+          appendSystemMessage(targetTabId, `Claude needs input:\n${question.text}${optionsText}`, true)
+          setPendingQuestionForTab(targetTabId, question)
+          setChatErrorForTab(targetTabId, question.text)
+        }
+      }
+
+      if (streamEvent.type === 'permission') {
+        const permission = extractPermissionSummary(streamEvent.data)
+        if (permission) {
+          appendSystemMessage(targetTabId, permission.message, true)
+          setPendingPermissionForTab(targetTabId, permission)
+          setChatErrorForTab(targetTabId, permission.message)
+        }
       }
 
       if (streamEvent.type === 'token' && streamEvent.text && activeAssistantMessageIdRef.current) {
@@ -1238,12 +1567,12 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     })
   }
 
-  async function handleSendChatMessage() {
+  async function handleSendChatMessage(overrides?: { message?: string; permissionMode?: ClaudePermissionMode | null }) {
     if (workstreamId === null || isSendingChat) {
       return
     }
 
-    const message = chatInput.trim()
+    const message = (overrides?.message ?? chatInput).trim()
     if (!message) {
       return
     }
@@ -1263,8 +1592,13 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     const activeTabSessionId = targetTab.resumeSessionId
     const allowWorkstreamSessionFallback = targetTab.kind !== 'new'
 
-    setChatInput('')
-    resetChatInputHeight()
+    if (!overrides?.message) {
+      setChatInput('')
+      resetChatInputHeight()
+    }
+
+    setPendingQuestionForTab(targetTabId, null)
+    setPendingPermissionForTab(targetTabId, null)
     setChatErrorForTab(targetTabId, null)
     setIsSendingChat(true)
     setActiveStreamId(null)
@@ -1286,7 +1620,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
         workstream_id: workstreamId,
         message,
         resume_session_id: activeTabSessionId,
-        allow_workstream_session_fallback: allowWorkstreamSessionFallback
+        allow_workstream_session_fallback: allowWorkstreamSessionFallback,
+        permission_mode: overrides?.permissionMode ?? null
       })
 
       streamTabLookupRef.current[result.stream_id] = targetTabId
@@ -1363,6 +1698,51 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       void chatSessionQuery.refetch()
       void linkedConversationUuidsQuery.refetch()
     }
+  }
+
+  async function handleAnswerPendingQuestion(option: QuestionOptionSummary) {
+    if (!activeChatTabId) {
+      return
+    }
+
+    const question = pendingQuestionsByTab[activeChatTabId]
+    if (!question?.text) {
+      return
+    }
+
+    const answerText = option.description ? `${option.label} (${option.description})` : option.label
+    const response = `Answer to your question "${question.text}": ${answerText}`
+    await handleSendChatMessage({ message: response })
+  }
+
+  async function handleApprovePendingPermission() {
+    if (!activeChatTabId) {
+      return
+    }
+
+    const permission = pendingPermissionsByTab[activeChatTabId]
+    if (!permission) {
+      return
+    }
+
+    const commandLines =
+      permission.commands.length > 0 ? permission.commands.map((command) => `- ${command}`).join('\n') : '- Previously blocked command'
+    const response = `Approved. Continue and retry the blocked operation(s):\n${commandLines}`
+    await handleSendChatMessage({ message: response, permissionMode: 'bypassPermissions' })
+  }
+
+  async function handleRejectPendingPermission() {
+    if (!activeChatTabId) {
+      return
+    }
+
+    const permission = pendingPermissionsByTab[activeChatTabId]
+    if (!permission) {
+      return
+    }
+
+    const response = 'I do not approve the blocked operation. Continue without running it.'
+    await handleSendChatMessage({ message: response })
   }
 
   async function handleCancelActiveStream() {
@@ -1705,19 +2085,41 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                     )
                   }
 
+                  if (chatMessage.role === 'system') {
+                    return (
+                      <div key={chatMessage.id} className={`message-group message-system ${chatMessage.error ? 'message-system-error' : ''}`}>
+                        <div className="assistant-avatar system">SYS</div>
+                        <div className="message-content">
+                          <div className={`message-bubble message-bubble-system ${chatMessage.error ? 'message-bubble-error' : ''}`}>
+                            <ChatMessageContent text={chatMessage.text} />
+                          </div>
+                          <div className="message-time">{formatRelativeTime(chatMessage.createdAt)}</div>
+                        </div>
+                      </div>
+                    )
+                  }
+
                   return (
                     <div key={chatMessage.id} className={`message-group message-assistant ${chatMessage.error ? 'message-assistant-error' : ''}`}>
                       <div className="assistant-avatar">AI</div>
                       <div className="message-content">
                         {(chatMessage.toolUses ?? []).map((toolUse) => (
-                          <div key={toolUse.id} className="tool-use">
-                            <div className={`tool-icon ${toolUse.kind}`}>{toolUse.kind.slice(0, 1).toUpperCase()}</div>
-                            <span className="tool-name">{toolUse.name}</span>
-                            <span className="tool-target">{toolUse.target}</span>
-                            <div className="tool-status">
-                              <div className="dot" />
-                              <span>{toolUse.status}</span>
+                          <div key={toolUse.id} className="tool-use-group">
+                            <div className={`tool-use ${toolUse.error ? 'tool-use-error' : ''}`}>
+                              <div className={`tool-icon ${toolUse.kind}`}>{toolUse.kind.slice(0, 1).toUpperCase()}</div>
+                              <span className="tool-name">{toolUse.name}</span>
+                              <span className="tool-target">{toolUse.target}</span>
+                              {toolUse.detail && <span className="tool-detail">{toolUse.detail}</span>}
+                              <div className="tool-status">
+                                <div className="dot" />
+                                <span>{toolUse.status}</span>
+                              </div>
                             </div>
+                            {toolUse.output && (
+                              <div className={`tool-output ${toolUse.error ? 'tool-output-error' : ''}`}>
+                                <ChatMessageContent text={toolUse.output} />
+                              </div>
+                            )}
                           </div>
                         ))}
 
@@ -1858,6 +2260,53 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                 </button>
               </div>
             </div>
+            {(activePendingQuestion || activePendingPermission) && (
+              <div className="pending-actions">
+                {activePendingQuestion && (
+                  <div className="pending-card">
+                    <p className="pending-title">Claude is asking for input</p>
+                    <p className="pending-text">{activePendingQuestion.text}</p>
+                    <div className="pending-buttons">
+                      {activePendingQuestion.options.map((option) => (
+                        <button
+                          key={`${option.label}-${option.description ?? ''}`}
+                          type="button"
+                          className="pending-btn"
+                          onClick={() => void handleAnswerPendingQuestion(option)}
+                          disabled={isSendingChat}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {activePendingPermission && (
+                  <div className="pending-card pending-card-warning">
+                    <p className="pending-title">Claude needs permission</p>
+                    <p className="pending-text">{activePendingPermission.message}</p>
+                    <div className="pending-buttons">
+                      <button
+                        type="button"
+                        className="pending-btn pending-btn-primary"
+                        onClick={() => void handleApprovePendingPermission()}
+                        disabled={isSendingChat}
+                      >
+                        Approve and Continue
+                      </button>
+                      <button
+                        type="button"
+                        className="pending-btn"
+                        onClick={() => void handleRejectPendingPermission()}
+                        disabled={isSendingChat}
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="input-hint">
               <span>
                 <kbd>Enter</kbd> to send
