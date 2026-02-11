@@ -16,6 +16,7 @@ interface ClaudeCliRequest {
   cwd: string
   resume_session_id?: string | null
   model?: string | null
+  permission_mode?: 'acceptEdits' | 'bypassPermissions' | 'default' | 'delegate' | 'dontAsk' | 'plan' | null
 }
 
 interface ActiveStream {
@@ -151,7 +152,7 @@ function maybeParseJsonLine(rawLine: string): Record<string, unknown> | null {
   }
 }
 
-function extractAssistantTextFromContent(content: unknown): string {
+function extractTextFromContent(content: unknown): string {
   if (typeof content === 'string') {
     return content
   }
@@ -203,26 +204,137 @@ function extractTextDelta(payload: Record<string, unknown>): string | null {
   return delta.text
 }
 
-function extractToolUseFromStreamEvent(payload: Record<string, unknown>): Record<string, unknown> | null {
-  if (payload.type !== 'stream_event') {
-    return null
+function normalizeToolUseInput(input: unknown): unknown {
+  if (isRecord(input) || Array.isArray(input)) {
+    return input
   }
 
-  const event = payload.event
-  if (!isRecord(event) || event.type !== 'content_block_start') {
-    return null
+  if (typeof input === 'string' || typeof input === 'number' || typeof input === 'boolean') {
+    return input
   }
 
-  const contentBlock = event.content_block
-  if (!isRecord(contentBlock) || contentBlock.type !== 'tool_use') {
-    return null
+  return null
+}
+
+function extractToolUsesFromAssistantPayload(payload: Record<string, unknown>): Record<string, unknown>[] {
+  if (payload.type !== 'assistant') {
+    return []
   }
 
-  return {
-    id: typeof contentBlock.id === 'string' ? contentBlock.id : null,
-    name: typeof contentBlock.name === 'string' ? contentBlock.name : null,
-    input: isRecord(contentBlock.input) || Array.isArray(contentBlock.input) ? contentBlock.input : null
+  const message = payload.message
+  if (!isRecord(message) || !Array.isArray(message.content)) {
+    return []
   }
+
+  const toolUses: Record<string, unknown>[] = []
+  for (const block of message.content) {
+    if (!isRecord(block) || block.type !== 'tool_use') {
+      continue
+    }
+
+    toolUses.push({
+      id: typeof block.id === 'string' ? block.id : null,
+      name: typeof block.name === 'string' ? block.name : null,
+      input: normalizeToolUseInput(block.input)
+    })
+  }
+
+  return toolUses
+}
+
+function extractToolResultsFromUserPayload(payload: Record<string, unknown>): Record<string, unknown>[] {
+  if (payload.type !== 'user') {
+    return []
+  }
+
+  const message = payload.message
+  if (!isRecord(message) || message.role !== 'user' || !Array.isArray(message.content)) {
+    return []
+  }
+
+  const toolUseResult = isRecord(payload.tool_use_result) ? payload.tool_use_result : null
+  const toolResults: Record<string, unknown>[] = []
+
+  for (const block of message.content) {
+    if (!isRecord(block) || block.type !== 'tool_result') {
+      continue
+    }
+
+    const blockText = extractTextFromContent(block.content).trim()
+    const stdout = typeof toolUseResult?.stdout === 'string' ? toolUseResult.stdout.trim() : ''
+    const stderr = typeof toolUseResult?.stderr === 'string' ? toolUseResult.stderr.trim() : ''
+    const text = blockText || (stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr || '')
+
+    toolResults.push({
+      tool_use_id: typeof block.tool_use_id === 'string' ? block.tool_use_id : null,
+      is_error: block.is_error === true,
+      text: text || null,
+      stdout: stdout || null,
+      stderr: stderr || null,
+      interrupted: toolUseResult?.interrupted === true
+    })
+  }
+
+  return toolResults
+}
+
+function extractPermissionDenials(payload: Record<string, unknown>): Record<string, unknown>[] {
+  if (payload.type !== 'result' || !Array.isArray(payload.permission_denials)) {
+    return []
+  }
+
+  const denials: Record<string, unknown>[] = []
+  for (const entry of payload.permission_denials) {
+    if (!isRecord(entry)) {
+      continue
+    }
+
+    denials.push({
+      tool_name: typeof entry.tool_name === 'string' ? entry.tool_name : null,
+      tool_use_id: typeof entry.tool_use_id === 'string' ? entry.tool_use_id : null,
+      tool_input: normalizeToolUseInput(entry.tool_input)
+    })
+  }
+
+  return denials
+}
+
+function summarizePermissionInput(input: unknown): string {
+  if (typeof input === 'string') {
+    const trimmed = input.trim()
+    return trimmed || '(no input details)'
+  }
+
+  if (!isRecord(input)) {
+    return '(no input details)'
+  }
+
+  const command = input.command
+  if (typeof command === 'string' && command.trim()) {
+    return command.trim()
+  }
+
+  const description = input.description
+  if (typeof description === 'string' && description.trim()) {
+    return description.trim()
+  }
+
+  const keys = Object.keys(input)
+  return keys.length > 0 ? `{${keys.slice(0, 3).join(', ')}}` : '(no input details)'
+}
+
+function buildPermissionSummary(denials: Record<string, unknown>[]): string {
+  if (denials.length === 0) {
+    return 'Claude requested approval for one or more operations.'
+  }
+
+  const lines = denials.map((entry) => {
+    const toolName = typeof entry.tool_name === 'string' && entry.tool_name.trim() ? entry.tool_name.trim() : 'Tool'
+    const inputSummary = summarizePermissionInput(entry.tool_input)
+    return `- ${toolName}: ${inputSummary}`
+  })
+
+  return `Claude requested approval for the following operations:\n${lines.join('\n')}`
 }
 
 function buildClaudeArgs(input: ClaudeCliRequest): string[] {
@@ -243,6 +355,11 @@ function buildClaudeArgs(input: ClaudeCliRequest): string[] {
   const model = input.model?.trim()
   if (model) {
     args.push('--model', model)
+  }
+
+  const permissionMode = input.permission_mode?.trim()
+  if (permissionMode) {
+    args.push('--permission-mode', permissionMode)
   }
 
   return args
@@ -283,6 +400,7 @@ export async function runClaudeCliStream(
     let resultText: string | null = null
     let markedAsError = false
     const stderrLines: string[] = []
+    const permissionDenials: Record<string, unknown>[] = []
 
     const stdoutLines = readline.createInterface({ input: child.stdout })
     const stderrLinesReader = readline.createInterface({ input: child.stderr })
@@ -325,19 +443,29 @@ export async function runClaudeCliStream(
         emit({ type: 'token', text: tokenDelta, session_id: sessionId })
       }
 
-      const toolUse = extractToolUseFromStreamEvent(parsed)
-      if (toolUse) {
-        emit({ type: 'tool_use', data: toolUse, session_id: sessionId })
-      }
-
       if (parsed.type === 'assistant') {
+        const toolUses = extractToolUsesFromAssistantPayload(parsed)
+        for (const toolUse of toolUses) {
+          emit({ type: 'tool_use', data: toolUse, session_id: sessionId })
+
+          const toolName = typeof toolUse.name === 'string' ? toolUse.name.toLowerCase() : ''
+          if (toolName === 'askuserquestion') {
+            emit({ type: 'question', data: toolUse, session_id: sessionId })
+          }
+        }
+
         const message = parsed.message
         if (isRecord(message)) {
-          assistantTextFromFinalMessage = extractAssistantTextFromContent(message.content)
+          assistantTextFromFinalMessage = extractTextFromContent(message.content)
           if (assistantTextFromFinalMessage) {
             emit({ type: 'assistant', text: assistantTextFromFinalMessage, session_id: sessionId })
           }
         }
+      }
+
+      const toolResults = extractToolResultsFromUserPayload(parsed)
+      for (const toolResult of toolResults) {
+        emit({ type: 'tool_result', data: toolResult, session_id: sessionId })
       }
 
       if (parsed.type === 'result') {
@@ -347,6 +475,14 @@ export async function runClaudeCliStream(
         if (typeof parsed.is_error === 'boolean') {
           markedAsError = parsed.is_error
         }
+
+        const denied = extractPermissionDenials(parsed)
+        if (denied.length > 0) {
+          permissionDenials.push(...denied)
+          markedAsError = true
+          emit({ type: 'permission', data: { denials: denied }, session_id: sessionId })
+        }
+
         emit({ type: 'result', data: parsed, session_id: sessionId })
       }
     })
@@ -372,8 +508,12 @@ export async function runClaudeCliStream(
 
       const assistantText = assistantTextFromChunks || assistantTextFromFinalMessage || resultText || ''
       const stderrText = stderrLines.length > 0 ? stderrLines.join('\n') : null
-      const isError = markedAsError || code !== 0
-      const finalResultText = resultText ?? (isError ? stderrText : null)
+      const permissionSummary = permissionDenials.length > 0 ? buildPermissionSummary(permissionDenials) : null
+      const isError = markedAsError || code !== 0 || permissionDenials.length > 0
+      const finalResultText =
+        resultText && permissionSummary
+          ? `${resultText}\n\n${permissionSummary}`
+          : resultText ?? (isError ? (stderrText ?? permissionSummary) : null)
 
       emit({
         type: 'done',

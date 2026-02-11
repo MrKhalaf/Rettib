@@ -157,7 +157,12 @@ function extractUserText(content: unknown): string | null {
       continue
     }
 
-    if (item.type === 'text' && typeof item.text === 'string') {
+    const itemType = typeof item.type === 'string' ? item.type : null
+    if (itemType === 'tool_result' || itemType === 'tool_use') {
+      continue
+    }
+
+    if ((itemType === null || itemType === 'text' || itemType === 'input_text') && typeof item.text === 'string') {
       const value = item.text.trim()
       if (value) {
         parts.push(value)
@@ -165,7 +170,7 @@ function extractUserText(content: unknown): string | null {
       continue
     }
 
-    if (typeof item.content === 'string') {
+    if ((itemType === null || itemType === 'text' || itemType === 'input_text') && typeof item.content === 'string') {
       const value = item.content.trim()
       if (value) {
         parts.push(value)
