@@ -12,6 +12,7 @@ export interface Workstream {
   status: WorkstreamStatus
   next_action: string | null
   notes: string | null
+  chat_run_directory: string | null
   created_at: number
   updated_at: number
 }
@@ -23,6 +24,7 @@ export interface CreateWorkstreamInput {
   status?: WorkstreamStatus
   next_action?: string | null
   notes?: string | null
+  chat_run_directory?: string | null
 }
 
 export interface UpdateWorkstreamInput {
@@ -32,6 +34,7 @@ export interface UpdateWorkstreamInput {
   status?: WorkstreamStatus
   next_action?: string | null
   notes?: string | null
+  chat_run_directory?: string | null
 }
 
 export interface Task {
@@ -93,6 +96,47 @@ export interface ClaudeConversationPreviewMessage {
   timestamp: number | null
 }
 
+export type ContextDocSource = 'obsidian' | 'file'
+
+export interface ContextDocInput {
+  source: ContextDocSource
+  reference: string
+}
+
+export interface SessionContextDoc {
+  id: number
+  workstream_id: number
+  conversation_uuid: string
+  source: ContextDocSource
+  reference: string
+  normalized_reference: string
+  resolved_path: string | null
+  status: 'ok' | 'missing' | 'invalid'
+  char_count: number | null
+  updated_at: number
+}
+
+export interface WorkstreamContextDoc {
+  id: number
+  workstream_id: number
+  source: ContextDocSource
+  reference: string
+  normalized_reference: string
+  resolved_path: string | null
+  status: 'ok' | 'missing' | 'invalid'
+  char_count: number | null
+  updated_at: number
+}
+
+export interface ResolveContextDocResult {
+  source: ContextDocSource
+  reference: string
+  normalized_reference: string
+  resolved_path: string | null
+  exists: boolean
+  warning?: string
+}
+
 export interface SendChatMessageInput {
   workstream_id: number
   message: string
@@ -101,6 +145,7 @@ export interface SendChatMessageInput {
   allow_workstream_session_fallback?: boolean
   model?: string | null
   permission_mode?: ClaudePermissionMode | null
+  context_docs?: ContextDocInput[]
 }
 
 export interface SendChatMessageResult {
@@ -160,7 +205,8 @@ export interface WorkstreamScore {
   blocked_penalty: number
   total_score: number
   days_since_progress: number
-  staleness_basis: 'progress' | 'created'
+  staleness_basis: 'progress' | 'chat' | 'session' | 'created'
+  staleness_reference_at: number
 }
 
 export interface WorkstreamWithScore extends Workstream {
@@ -209,6 +255,11 @@ export interface ElectronApi {
     link: (workstreamId: number, conversationUuid: string) => Promise<void>
     unlink: (workstreamId: number, conversationUuid: string) => Promise<void>
     getWorkstreamSession: (workstreamId: number) => Promise<WorkstreamChatSession | null>
+    getWorkstreamContext: (workstreamId: number) => Promise<WorkstreamContextDoc[]>
+    setWorkstreamContext: (workstreamId: number, docs: ContextDocInput[]) => Promise<WorkstreamContextDoc[]>
+    getSessionContext: (workstreamId: number, conversationUuid: string) => Promise<SessionContextDoc[]>
+    setSessionContext: (workstreamId: number, conversationUuid: string, docs: ContextDocInput[]) => Promise<SessionContextDoc[]>
+    resolveContextDocs: (docs: ContextDocInput[]) => Promise<ResolveContextDocResult[]>
     sendMessage: (input: SendChatMessageInput) => Promise<SendChatMessageResult>
     cancelStream: (streamId: string) => Promise<void>
     onStreamEvent: (listener: (event: ChatStreamEvent) => void) => () => void
@@ -222,5 +273,10 @@ export interface ElectronApi {
   }
   app: {
     openObsidianNote: (noteRef: string) => Promise<{ ok: boolean; path?: string; error?: string }>
+    pickContextFile: (
+      options?: {
+        defaultPath?: string | null
+      }
+    ) => Promise<{ canceled: boolean; path: string | null }>
   }
 }

@@ -4,9 +4,11 @@ import Database from 'better-sqlite3'
 
 import type {
   ChatReference,
+  ContextDocInput,
   CreateTaskInput,
   CreateWorkstreamInput,
   ProgressUpdate,
+  SessionContextDoc,
   SyncRun,
   SyncRunStatus,
   SyncSource,
@@ -17,8 +19,9 @@ import type {
   WorkstreamChatSession,
   WorkstreamListItem
 } from '../shared/types'
+import { normalizeContextReference } from './context-service'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 5
 
 let dbInstance: Database.Database | null = null
 
@@ -38,6 +41,121 @@ function ensureChatSessionSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_workstream_chat_sessions_updated
     ON workstream_chat_sessions(updated_at DESC);
   `)
+}
+
+function ensureContextSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_context_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+      conversation_uuid TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('obsidian', 'file')),
+      reference TEXT NOT NULL,
+      normalized_reference TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(workstream_id, conversation_uuid, normalized_reference)
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_context_state (
+      conversation_uuid TEXT PRIMARY KEY,
+      workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+      context_fingerprint TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_context_docs_ws_conv
+    ON chat_context_documents(workstream_id, conversation_uuid);
+
+    CREATE INDEX IF NOT EXISTS idx_chat_context_state_ws
+    ON chat_context_state(workstream_id);
+  `)
+}
+
+function ensureWorkstreamContextSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workstream_context_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+      source TEXT NOT NULL CHECK (source IN ('obsidian', 'file')),
+      reference TEXT NOT NULL,
+      normalized_reference TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(workstream_id, normalized_reference)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workstream_context_docs_ws
+    ON workstream_context_documents(workstream_id);
+  `)
+}
+
+function ensureWorkstreamRunDirectoryColumn(db: Database.Database): void {
+  const columns = db.prepare(`PRAGMA table_info(workstreams)`).all() as Array<{ name: string }>
+  const columnNames = new Set(columns.map((column) => column.name))
+
+  if (!columnNames.has('chat_run_directory')) {
+    db.exec(`ALTER TABLE workstreams ADD COLUMN chat_run_directory TEXT`)
+  }
+}
+
+function parseRepoPathFromNotes(notes: string | null): string | null {
+  if (!notes) {
+    return null
+  }
+
+  const repoLine = notes
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => /^repo:/i.test(line))
+
+  if (!repoLine) {
+    return null
+  }
+
+  const rawPath = repoLine.replace(/^repo:/i, '').trim()
+  if (!rawPath) {
+    return null
+  }
+
+  if (rawPath.startsWith('~/')) {
+    return path.join(process.env.HOME ?? '', rawPath.slice(2))
+  }
+
+  return rawPath
+}
+
+function backfillChatRunDirectoryFromLegacyNotes(db: Database.Database): void {
+  const rows = db
+    .prepare(
+      `
+      SELECT id, notes, chat_run_directory
+      FROM workstreams
+      WHERE chat_run_directory IS NULL
+      `
+    )
+    .all() as Array<{ id: number; notes: string | null; chat_run_directory: string | null }>
+
+  const updateStatement = db.prepare(
+    `
+    UPDATE workstreams
+    SET chat_run_directory = ?, updated_at = ?
+    WHERE id = ?
+    `
+  )
+
+  for (const row of rows) {
+    if (row.chat_run_directory) {
+      continue
+    }
+
+    const repoPath = parseRepoPathFromNotes(row.notes)
+    if (!repoPath) {
+      continue
+    }
+
+    updateStatement.run(repoPath, nowMs(), row.id)
+  }
 }
 
 function normalizeClaudeSyncSourceType(db: Database.Database): void {
@@ -148,6 +266,10 @@ function runMigrations(db: Database.Database): void {
 
   if (version >= SCHEMA_VERSION) {
     ensureChatSessionSchema(db)
+    ensureWorkstreamRunDirectoryColumn(db)
+    ensureContextSchema(db)
+    ensureWorkstreamContextSchema(db)
+    backfillChatRunDirectoryFromLegacyNotes(db)
     normalizeClaudeSyncSourceType(db)
     normalizeClaudeSyncSourcePath(db)
     seedInitialWorkstreams(db)
@@ -165,6 +287,7 @@ function runMigrations(db: Database.Database): void {
         status TEXT NOT NULL CHECK (status IN ('active', 'blocked', 'waiting', 'done')) DEFAULT 'active',
         next_action TEXT,
         notes TEXT,
+        chat_run_directory TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -205,6 +328,36 @@ function runMigrations(db: Database.Database): void {
         updated_at INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS chat_context_documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+        conversation_uuid TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('obsidian', 'file')),
+        reference TEXT NOT NULL,
+        normalized_reference TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(workstream_id, conversation_uuid, normalized_reference)
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_context_state (
+        conversation_uuid TEXT PRIMARY KEY,
+        workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+        context_fingerprint TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS workstream_context_documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+        source TEXT NOT NULL CHECK (source IN ('obsidian', 'file')),
+        reference TEXT NOT NULL,
+        normalized_reference TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(workstream_id, normalized_reference)
+      );
+
       CREATE TABLE IF NOT EXISTS sync_sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         type TEXT NOT NULL,
@@ -229,6 +382,9 @@ function runMigrations(db: Database.Database): void {
       CREATE INDEX IF NOT EXISTS idx_tasks_workstream ON tasks(workstream_id, status, position);
       CREATE INDEX IF NOT EXISTS idx_chat_refs_workstream ON chat_references(workstream_id, chat_timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_workstream_chat_sessions_updated ON workstream_chat_sessions(updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_context_docs_ws_conv ON chat_context_documents(workstream_id, conversation_uuid);
+      CREATE INDEX IF NOT EXISTS idx_chat_context_state_ws ON chat_context_state(workstream_id);
+      CREATE INDEX IF NOT EXISTS idx_workstream_context_docs_ws ON workstream_context_documents(workstream_id);
       CREATE INDEX IF NOT EXISTS idx_sync_runs_source ON sync_runs(source_id, started_at DESC);
 
       CREATE TRIGGER IF NOT EXISTS trg_progress_insert_update_workstream
@@ -304,6 +460,16 @@ function runMigrations(db: Database.Database): void {
     ensureChatSessionSchema(db)
     normalizeClaudeSyncSourceType(db)
     normalizeClaudeSyncSourcePath(db)
+  }
+
+  if (version < 4) {
+    ensureWorkstreamRunDirectoryColumn(db)
+    ensureContextSchema(db)
+    backfillChatRunDirectoryFromLegacyNotes(db)
+  }
+
+  if (version < 5) {
+    ensureWorkstreamContextSchema(db)
   }
 
   db.pragma(`user_version = ${SCHEMA_VERSION}`)
@@ -444,10 +610,11 @@ function seedInitialWorkstreams(db: Database.Database): void {
         status,
         next_action,
         notes,
+        chat_run_directory,
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
 
@@ -465,6 +632,7 @@ function seedInitialWorkstreams(db: Database.Database): void {
       SET
         next_action = COALESCE(next_action, ?),
         notes = COALESCE(notes, ?),
+        chat_run_directory = COALESCE(chat_run_directory, ?),
         updated_at = ?
       WHERE id = ?
       `
@@ -474,7 +642,7 @@ function seedInitialWorkstreams(db: Database.Database): void {
     for (const seed of INITIAL_WORKSTREAMS) {
       const existing = existingWorkstreamStatement.get(seed.name) as { id: number } | undefined
       if (existing) {
-        backfillStatement.run(seed.next_action, seed.notes, now, existing.id)
+        backfillStatement.run(seed.next_action, seed.notes, parseRepoPathFromNotes(seed.notes), now, existing.id)
 
         if (shouldCreateTaskFromNextAction(seed.next_action)) {
           const existingTaskCount = taskCountStatement.get(existing.id) as { count: number }
@@ -493,6 +661,7 @@ function seedInitialWorkstreams(db: Database.Database): void {
         seed.status,
         seed.next_action,
         seed.notes,
+        parseRepoPathFromNotes(seed.notes),
         now,
         now
       )
@@ -532,6 +701,7 @@ export function listWorkstreams(db = getDatabase()): Workstream[] {
         status,
         next_action,
         notes,
+        chat_run_directory,
         created_at,
         updated_at
       FROM workstreams
@@ -556,6 +726,7 @@ export function getWorkstream(db: Database.Database, id: number): Workstream | n
         status,
         next_action,
         notes,
+        chat_run_directory,
         created_at,
         updated_at
       FROM workstreams
@@ -574,6 +745,8 @@ export function createWorkstream(data: CreateWorkstreamInput, db = getDatabase()
   const status = data.status ?? 'active'
   const nextAction = typeof data.next_action === 'string' ? data.next_action.trim() || null : data.next_action ?? null
   const notes = typeof data.notes === 'string' ? data.notes.trim() || null : data.notes ?? null
+  const chatRunDirectory =
+    typeof data.chat_run_directory === 'string' ? data.chat_run_directory.trim() || null : data.chat_run_directory ?? null
   const result = db
     .prepare(
       `
@@ -584,13 +757,14 @@ export function createWorkstream(data: CreateWorkstreamInput, db = getDatabase()
         status,
         next_action,
         notes,
+        chat_run_directory,
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
-    .run(data.name.trim(), data.priority, data.target_cadence_days, status, nextAction, notes, now, now)
+    .run(data.name.trim(), data.priority, data.target_cadence_days, status, nextAction, notes, chatRunDirectory, now, now)
 
   return getWorkstream(db, Number(result.lastInsertRowid)) as Workstream
 }
@@ -634,6 +808,15 @@ export function updateWorkstream(id: number, data: UpdateWorkstreamInput, db = g
     updates.push('notes = ?')
     if (typeof data.notes === 'string') {
       values.push(data.notes.trim() || null)
+    } else {
+      values.push(null)
+    }
+  }
+
+  if (data.chat_run_directory !== undefined) {
+    updates.push('chat_run_directory = ?')
+    if (typeof data.chat_run_directory === 'string') {
+      values.push(data.chat_run_directory.trim() || null)
     } else {
       values.push(null)
     }
@@ -919,6 +1102,242 @@ export function setWorkstreamChatSession(
   return getWorkstreamChatSession(workstreamId, db) as WorkstreamChatSession
 }
 
+interface StoredContextDocRow {
+  id: number
+  workstream_id: number
+  conversation_uuid: string
+  source: 'obsidian' | 'file'
+  reference: string
+  normalized_reference: string
+  created_at: number
+  updated_at: number
+}
+
+interface StoredWorkstreamContextDocRow {
+  id: number
+  workstream_id: number
+  source: 'obsidian' | 'file'
+  reference: string
+  normalized_reference: string
+  created_at: number
+  updated_at: number
+}
+
+export function listWorkstreamContextDocuments(
+  workstreamId: number,
+  db = getDatabase()
+): StoredWorkstreamContextDocRow[] {
+  return db
+    .prepare(
+      `
+      SELECT
+        id,
+        workstream_id,
+        source,
+        reference,
+        normalized_reference,
+        created_at,
+        updated_at
+      FROM workstream_context_documents
+      WHERE workstream_id = ?
+      ORDER BY created_at ASC, id ASC
+      `
+    )
+    .all(workstreamId) as StoredWorkstreamContextDocRow[]
+}
+
+export function replaceWorkstreamContextDocuments(
+  workstreamId: number,
+  docs: ContextDocInput[],
+  db = getDatabase()
+): StoredWorkstreamContextDocRow[] {
+  const now = nowMs()
+  const dedupedDocs: Array<{ source: 'obsidian' | 'file'; reference: string; normalized_reference: string }> = []
+  const seen = new Set<string>()
+
+  for (const doc of docs) {
+    if (doc.source !== 'obsidian' && doc.source !== 'file') {
+      continue
+    }
+
+    const reference = doc.reference.trim()
+    if (!reference) {
+      continue
+    }
+
+    const normalizedReference = normalizeContextReference(doc.source, reference)
+    if (!normalizedReference || seen.has(normalizedReference)) {
+      continue
+    }
+
+    seen.add(normalizedReference)
+    dedupedDocs.push({
+      source: doc.source,
+      reference,
+      normalized_reference: normalizedReference
+    })
+  }
+
+  const tx = db.transaction(() => {
+    db.prepare(
+      `
+      DELETE FROM workstream_context_documents
+      WHERE workstream_id = ?
+      `
+    ).run(workstreamId)
+
+    const insert = db.prepare(
+      `
+      INSERT INTO workstream_context_documents (
+        workstream_id,
+        source,
+        reference,
+        normalized_reference,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      `
+    )
+
+    for (const doc of dedupedDocs) {
+      insert.run(workstreamId, doc.source, doc.reference, doc.normalized_reference, now, now)
+    }
+  })
+
+  tx()
+  return listWorkstreamContextDocuments(workstreamId, db)
+}
+
+export function listSessionContextDocuments(
+  workstreamId: number,
+  conversationUuid: string,
+  db = getDatabase()
+): StoredContextDocRow[] {
+  return db
+    .prepare(
+      `
+      SELECT
+        id,
+        workstream_id,
+        conversation_uuid,
+        source,
+        reference,
+        normalized_reference,
+        created_at,
+        updated_at
+      FROM chat_context_documents
+      WHERE workstream_id = ? AND conversation_uuid = ?
+      ORDER BY created_at ASC, id ASC
+      `
+    )
+    .all(workstreamId, conversationUuid) as StoredContextDocRow[]
+}
+
+export function replaceSessionContextDocuments(
+  workstreamId: number,
+  conversationUuid: string,
+  docs: ContextDocInput[],
+  db = getDatabase()
+): StoredContextDocRow[] {
+  const now = nowMs()
+  const dedupedDocs: Array<{ source: 'obsidian' | 'file'; reference: string; normalized_reference: string }> = []
+  const seen = new Set<string>()
+
+  for (const doc of docs) {
+    if (doc.source !== 'obsidian' && doc.source !== 'file') {
+      continue
+    }
+
+    const reference = doc.reference.trim()
+    if (!reference) {
+      continue
+    }
+
+    const normalizedReference = normalizeContextReference(doc.source, reference)
+    if (!normalizedReference || seen.has(normalizedReference)) {
+      continue
+    }
+
+    seen.add(normalizedReference)
+    dedupedDocs.push({
+      source: doc.source,
+      reference,
+      normalized_reference: normalizedReference
+    })
+  }
+
+  const tx = db.transaction(() => {
+    db.prepare(
+      `
+      DELETE FROM chat_context_documents
+      WHERE workstream_id = ? AND conversation_uuid = ?
+      `
+    ).run(workstreamId, conversationUuid)
+
+    const insert = db.prepare(
+      `
+      INSERT INTO chat_context_documents (
+        workstream_id,
+        conversation_uuid,
+        source,
+        reference,
+        normalized_reference,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      `
+    )
+
+    for (const doc of dedupedDocs) {
+      insert.run(workstreamId, conversationUuid, doc.source, doc.reference, doc.normalized_reference, now, now)
+    }
+  })
+
+  tx()
+  return listSessionContextDocuments(workstreamId, conversationUuid, db)
+}
+
+export function getSessionContextFingerprint(conversationUuid: string, db = getDatabase()): string | null {
+  const row = db
+    .prepare(
+      `
+      SELECT context_fingerprint
+      FROM chat_context_state
+      WHERE conversation_uuid = ?
+      LIMIT 1
+      `
+    )
+    .get(conversationUuid) as { context_fingerprint: string } | undefined
+
+  return row?.context_fingerprint ?? null
+}
+
+export function setSessionContextFingerprint(
+  workstreamId: number,
+  conversationUuid: string,
+  contextFingerprint: string,
+  db = getDatabase()
+): void {
+  db.prepare(
+    `
+    INSERT INTO chat_context_state (
+      conversation_uuid,
+      workstream_id,
+      context_fingerprint,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(conversation_uuid)
+    DO UPDATE SET
+      workstream_id = excluded.workstream_id,
+      context_fingerprint = excluded.context_fingerprint,
+      updated_at = excluded.updated_at
+    `
+  ).run(conversationUuid, workstreamId, contextFingerprint, nowMs())
+}
+
 export function listWorkstreamsWithLatestChat(db = getDatabase()): WorkstreamListItem[] {
   const workstreams = listWorkstreams(db)
   return workstreams.map((workstream) => ({
@@ -930,7 +1349,8 @@ export function listWorkstreamsWithLatestChat(db = getDatabase()): WorkstreamLis
       blocked_penalty: 0,
       total_score: 0,
       days_since_progress: 0,
-      staleness_basis: 'progress'
+      staleness_basis: 'progress',
+      staleness_reference_at: workstream.created_at
     },
     ranking_explanation: '',
     last_chat: getLatestChatReference(workstream.id, db)

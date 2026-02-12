@@ -2,11 +2,27 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { ipcMain, shell } from 'electron'
+import { dialog, ipcMain, shell } from 'electron'
 
-import type { CreateWorkstreamInput, SendChatMessageInput, UpdateTaskInput, UpdateWorkstreamInput } from '../shared/types'
+import type {
+  ContextDocInput,
+  ContextDocSource,
+  CreateWorkstreamInput,
+  ResolveContextDocResult,
+  SendChatMessageInput,
+  SessionContextDoc,
+  WorkstreamContextDoc,
+  UpdateTaskInput,
+  UpdateWorkstreamInput
+} from '../shared/types'
 import { ClaudeConnector } from './claude-connector'
 import { cancelClaudeCliStream, runClaudeCliStream } from './claude-cli-runner'
+import {
+  buildContextBundle,
+  computeContextFingerprint,
+  resolveContextDocs,
+  resolveObsidianReference
+} from './context-service'
 import { refreshNextActionFromChat } from './next-action-summarizer'
 import {
   completeSyncRun,
@@ -15,10 +31,13 @@ import {
   createWorkstream,
   deleteTask,
   getDatabase,
+  getSessionContextFingerprint,
   getWorkstreamChatSession,
   getOrCreateClaudeSyncSource,
   getWorkstream,
   linkChatReference,
+  listWorkstreamContextDocuments,
+  listSessionContextDocuments,
   listLinkedConversationUuids,
   listChatReferences,
   listProgress,
@@ -27,6 +46,9 @@ import {
   logProgress,
   unlinkChatReference,
   updateClaudeSourcePath,
+  replaceWorkstreamContextDocuments,
+  replaceSessionContextDocuments,
+  setSessionContextFingerprint,
   setWorkstreamChatSession,
   updateTask,
   updateWorkstream
@@ -66,32 +88,6 @@ function parseClaudePathFromSourceConfig(config: string): string | null {
   }
 }
 
-function parseRepoPathFromNotes(notes: string | null): string | null {
-  if (!notes) {
-    return null
-  }
-
-  const repoLine = notes
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => /^repo:/i.test(line))
-
-  if (!repoLine) {
-    return null
-  }
-
-  const rawPath = repoLine.replace(/^repo:/i, '').trim()
-  if (!rawPath) {
-    return null
-  }
-
-  if (rawPath.startsWith('~/')) {
-    return path.join(os.homedir(), rawPath.slice(2))
-  }
-
-  return rawPath
-}
-
 function normalizePathInput(input: string | null | undefined): string | null {
   if (!input) {
     return null
@@ -107,6 +103,34 @@ function normalizePathInput(input: string | null | undefined): string | null {
   }
 
   return path.isAbsolute(trimmed) ? trimmed : path.resolve(trimmed)
+}
+
+function normalizeWorkstreamRunDirectoryInput(
+  rawValue: unknown,
+  fieldName: string
+): string | null | undefined {
+  if (rawValue === undefined) {
+    return undefined
+  }
+
+  if (rawValue === null) {
+    return null
+  }
+
+  if (typeof rawValue !== 'string') {
+    throw new Error(`${fieldName} must be a string, null, or undefined`)
+  }
+
+  const normalized = normalizePathInput(rawValue)
+  if (!normalized) {
+    return null
+  }
+
+  if (!isExistingDirectory(normalized)) {
+    throw new Error(`${fieldName} must reference an existing directory`)
+  }
+
+  return normalized
 }
 
 function isExistingDirectory(input: string | null | undefined): input is string {
@@ -132,7 +156,153 @@ function resolveChatCwd(...candidates: Array<string | null | undefined>): string
   return os.homedir()
 }
 
+function parsePickContextFileOptions(value: unknown): { defaultPath: string | null } {
+  if (value === undefined || value === null) {
+    return { defaultPath: null }
+  }
+
+  const payload = ensureObject(value, 'pick context file options')
+  const defaultPathRaw = payload.defaultPath
+  if (defaultPathRaw === undefined || defaultPathRaw === null) {
+    return { defaultPath: null }
+  }
+
+  if (typeof defaultPathRaw !== 'string') {
+    throw new Error('pick context file options.defaultPath must be a string, null, or undefined')
+  }
+
+  const normalized = normalizePathInput(defaultPathRaw)
+  if (!normalized) {
+    return { defaultPath: null }
+  }
+
+  if (isExistingDirectory(normalized)) {
+    return { defaultPath: normalized }
+  }
+
+  try {
+    const stat = fs.statSync(normalized)
+    if (stat.isFile()) {
+      const parent = path.dirname(normalized)
+      return isExistingDirectory(parent) ? { defaultPath: parent } : { defaultPath: null }
+    }
+  } catch {
+    return { defaultPath: null }
+  }
+
+  return { defaultPath: null }
+}
+
 const CLAUDE_PERMISSION_MODES = new Set(['acceptEdits', 'bypassPermissions', 'default', 'delegate', 'dontAsk', 'plan'])
+const CONTEXT_DOC_SOURCES: ReadonlySet<ContextDocSource> = new Set(['obsidian', 'file'])
+
+function normalizeContextDocInput(entry: unknown, index: number): ContextDocInput {
+  const record = ensureObject(entry, `context doc at index ${index}`)
+  const source = ensureString(record.source, `context doc source at index ${index}`).trim() as ContextDocSource
+  const reference = ensureString(record.reference, `context doc reference at index ${index}`).trim()
+
+  if (!CONTEXT_DOC_SOURCES.has(source)) {
+    throw new Error(`context doc source at index ${index} must be one of: obsidian, file`)
+  }
+
+  if (!reference) {
+    throw new Error(`context doc reference at index ${index} must not be empty`)
+  }
+
+  return {
+    source,
+    reference
+  }
+}
+
+function parseContextDocsInput(value: unknown): ContextDocInput[] {
+  if (value === undefined || value === null) {
+    return []
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error('context_docs must be an array when provided')
+  }
+
+  return value.map((entry, index) => normalizeContextDocInput(entry, index))
+}
+
+function inferContextStatus(result: ResolveContextDocResult): SessionContextDoc['status'] {
+  if (result.exists) {
+    return 'ok'
+  }
+
+  const warning = (result.warning ?? '').toLowerCase()
+  if (warning.includes('invalid') || warning.includes('empty')) {
+    return 'invalid'
+  }
+
+  return 'missing'
+}
+
+function toContextDocInputs(rows: Array<{ source: ContextDocSource; reference: string }>): ContextDocInput[] {
+  return rows.map((row) => ({
+    source: row.source,
+    reference: row.reference
+  }))
+}
+
+function enrichSessionContextDocs(rows: Awaited<ReturnType<typeof listSessionContextDocuments>>): SessionContextDoc[] {
+  if (rows.length === 0) {
+    return []
+  }
+
+  const docInputs = toContextDocInputs(rows)
+  const resolved = resolveContextDocs(docInputs)
+  const bundle = buildContextBundle(docInputs)
+  const resolvedByKey = new Map(resolved.map((entry) => [entry.normalized_reference, entry]))
+  const metadataByKey = new Map(bundle.metadata.map((entry) => [entry.normalized_reference, entry]))
+
+  return rows.map((row) => {
+    const resolvedEntry = resolvedByKey.get(row.normalized_reference)
+    const metadataEntry = metadataByKey.get(row.normalized_reference)
+    return {
+      id: row.id,
+      workstream_id: row.workstream_id,
+      conversation_uuid: row.conversation_uuid,
+      source: row.source,
+      reference: row.reference,
+      normalized_reference: row.normalized_reference,
+      resolved_path: resolvedEntry?.resolved_path ?? null,
+      status: resolvedEntry ? inferContextStatus(resolvedEntry) : 'invalid',
+      char_count: metadataEntry?.char_count ?? null,
+      updated_at: row.updated_at
+    }
+  })
+}
+
+function enrichWorkstreamContextDocs(rows: Awaited<ReturnType<typeof listWorkstreamContextDocuments>>): WorkstreamContextDoc[] {
+  if (rows.length === 0) {
+    return []
+  }
+
+  const docInputs = toContextDocInputs(rows)
+  const resolved = resolveContextDocs(docInputs)
+  const bundle = buildContextBundle(docInputs)
+  const resolvedByKey = new Map(resolved.map((entry) => [entry.normalized_reference, entry]))
+  const metadataByKey = new Map(bundle.metadata.map((entry) => [entry.normalized_reference, entry]))
+
+  return rows.map((row) => {
+    const resolvedEntry = resolvedByKey.get(row.normalized_reference)
+    const metadataEntry = metadataByKey.get(row.normalized_reference)
+    return {
+      id: row.id,
+      workstream_id: row.workstream_id,
+      source: row.source,
+      reference: row.reference,
+      normalized_reference: row.normalized_reference,
+      resolved_path: resolvedEntry?.resolved_path ?? null,
+      status: resolvedEntry ? inferContextStatus(resolvedEntry) : 'invalid',
+      char_count: metadataEntry?.char_count ?? null,
+      updated_at: row.updated_at
+    }
+  })
+}
 
 function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
   const payload = ensureObject(data, 'chat payload')
@@ -165,6 +335,8 @@ function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
     payload.permission_mode === undefined || payload.permission_mode === null
       ? null
       : ensureString(payload.permission_mode, 'permission_mode').trim() || null
+  const contextDocsProvided = Object.prototype.hasOwnProperty.call(payload, 'context_docs')
+  const contextDocs = contextDocsProvided ? parseContextDocsInput(payload.context_docs) : undefined
 
   if (permissionModeRaw && !CLAUDE_PERMISSION_MODES.has(permissionModeRaw)) {
     throw new Error(
@@ -181,7 +353,8 @@ function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
     resume_session_id: resumeSessionId,
     allow_workstream_session_fallback: allowWorkstreamSessionFallback,
     model,
-    permission_mode: permissionModeRaw as SendChatMessageInput['permission_mode']
+    permission_mode: permissionModeRaw as SendChatMessageInput['permission_mode'],
+    context_docs: contextDocs
   }
 }
 
@@ -240,51 +413,6 @@ function makeConnectorFromSource(): ClaudeConnector {
   return new ClaudeConnector(configuredPath ?? undefined)
 }
 
-function resolveObsidianNotePath(noteRef: string): string | null {
-  const trimmed = noteRef.trim()
-  if (!trimmed) {
-    return null
-  }
-
-  const normalized = trimmed.replace(/\\/g, '/').replace(/\.md$/i, '')
-  const fileName = `${normalized}.md`
-
-  if (path.isAbsolute(fileName) && fs.existsSync(fileName)) {
-    return fileName
-  }
-
-  const iCloudObsidianRoot = path.join(
-    os.homedir(),
-    'Library',
-    'Mobile Documents',
-    'iCloud~md~obsidian',
-    'Documents'
-  )
-
-  if (!fs.existsSync(iCloudObsidianRoot)) {
-    return null
-  }
-
-  const directCandidate = path.join(iCloudObsidianRoot, fileName)
-  if (fs.existsSync(directCandidate)) {
-    return directCandidate
-  }
-
-  const vaultDirs = fs
-    .readdirSync(iCloudObsidianRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(iCloudObsidianRoot, entry.name))
-
-  for (const vaultDir of vaultDirs) {
-    const candidate = path.join(vaultDir, fileName)
-    if (fs.existsSync(candidate)) {
-      return candidate
-    }
-  }
-
-  return null
-}
-
 export function registerIpcHandlers(): void {
   ipcMain.handle('workstreams:list', async () => {
     const db = getDatabase()
@@ -310,12 +438,20 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('workstreams:create', async (_event, data: unknown) => {
     const payload = data as CreateWorkstreamInput
+    const normalizedRunDirectory = normalizeWorkstreamRunDirectoryInput(payload.chat_run_directory, 'chat_run_directory')
+    if (normalizedRunDirectory !== undefined) {
+      payload.chat_run_directory = normalizedRunDirectory
+    }
     return createWorkstream(payload, getDatabase())
   })
 
   ipcMain.handle('workstreams:update', async (_event, id: unknown, data: unknown) => {
     const workstreamId = ensureNumber(id, 'workstream id')
     const payload = data as UpdateWorkstreamInput
+    const normalizedRunDirectory = normalizeWorkstreamRunDirectoryInput(payload.chat_run_directory, 'chat_run_directory')
+    if (normalizedRunDirectory !== undefined) {
+      payload.chat_run_directory = normalizedRunDirectory
+    }
     updateWorkstream(workstreamId, payload, getDatabase())
   })
 
@@ -399,6 +535,47 @@ export function registerIpcHandlers(): void {
     return getWorkstreamChatSession(id, getDatabase())
   })
 
+  ipcMain.handle('chat:get-workstream-context', async (_event, workstreamId: unknown) => {
+    const id = ensureNumber(workstreamId, 'workstream id')
+    const rows = listWorkstreamContextDocuments(id, getDatabase())
+    return enrichWorkstreamContextDocs(rows)
+  })
+
+  ipcMain.handle('chat:set-workstream-context', async (_event, workstreamId: unknown, docs: unknown) => {
+    const id = ensureNumber(workstreamId, 'workstream id')
+    const payloadDocs = parseContextDocsInput(docs)
+    const rows = replaceWorkstreamContextDocuments(id, payloadDocs, getDatabase())
+    return enrichWorkstreamContextDocs(rows)
+  })
+
+  ipcMain.handle('chat:get-session-context', async (_event, workstreamId: unknown, conversationUuid: unknown) => {
+    const id = ensureNumber(workstreamId, 'workstream id')
+    const uuid = ensureString(conversationUuid, 'conversation uuid').trim()
+    if (!uuid) {
+      throw new Error('conversation uuid must not be empty')
+    }
+
+    const rows = listSessionContextDocuments(id, uuid, getDatabase())
+    return enrichSessionContextDocs(rows)
+  })
+
+  ipcMain.handle('chat:set-session-context', async (_event, workstreamId: unknown, conversationUuid: unknown, docs: unknown) => {
+    const id = ensureNumber(workstreamId, 'workstream id')
+    const uuid = ensureString(conversationUuid, 'conversation uuid').trim()
+    if (!uuid) {
+      throw new Error('conversation uuid must not be empty')
+    }
+
+    const payloadDocs = parseContextDocsInput(docs)
+    const rows = replaceSessionContextDocuments(id, uuid, payloadDocs, getDatabase())
+    return enrichSessionContextDocs(rows)
+  })
+
+  ipcMain.handle('chat:resolve-context-docs', async (_event, docs: unknown) => {
+    const payloadDocs = parseContextDocsInput(docs)
+    return resolveContextDocs(payloadDocs)
+  })
+
   ipcMain.handle('chat:send-message', async (event, data: unknown) => {
     const payload = parseSendChatMessageInput(data)
     const db = getDatabase()
@@ -411,8 +588,8 @@ export function registerIpcHandlers(): void {
     const currentSession = getWorkstreamChatSession(payload.workstream_id, db)
     const cwd = resolveChatCwd(
       payload.cwd ?? null,
+      workstream.chat_run_directory,
       currentSession?.project_cwd ?? null,
-      parseRepoPathFromNotes(workstream.notes),
       process.cwd(),
       os.homedir()
     )
@@ -420,8 +597,25 @@ export function registerIpcHandlers(): void {
       payload.resume_session_id ??
       (payload.allow_workstream_session_fallback === false ? null : (currentSession?.session_id ?? null))
 
+    const workstreamContextRows = listWorkstreamContextDocuments(payload.workstream_id, db)
+    const workstreamContextDocs = toContextDocInputs(workstreamContextRows)
+    const persistedContextRows = resumeSessionId ? listSessionContextDocuments(payload.workstream_id, resumeSessionId, db) : []
+    const persistedContextDocs = toContextDocInputs(persistedContextRows)
+    const contextDocs =
+      payload.context_docs !== undefined && payload.context_docs !== null
+        ? payload.context_docs
+        : persistedContextDocs.length > 0
+          ? persistedContextDocs
+          : workstreamContextDocs
+    const contextBundle = buildContextBundle(contextDocs)
+    const contextFingerprint = computeContextFingerprint(contextBundle.metadata)
+    const previousFingerprint = resumeSessionId ? getSessionContextFingerprint(resumeSessionId, db) : null
+    const shouldInjectContext =
+      Boolean(contextBundle.text) && (resumeSessionId === null || previousFingerprint === null || previousFingerprint !== contextFingerprint)
+    const message = shouldInjectContext && contextBundle.text ? `${contextBundle.text}\n\n${payload.message}` : payload.message
+
     const result = await runClaudeCliStream(event, {
-      message: payload.message,
+      message,
       cwd,
       resume_session_id: resumeSessionId,
       model: payload.model ?? null,
@@ -431,6 +625,8 @@ export function registerIpcHandlers(): void {
     const sessionId = result.session_id ?? resumeSessionId
     if (sessionId) {
       setWorkstreamChatSession(payload.workstream_id, sessionId, cwd, db)
+      replaceSessionContextDocuments(payload.workstream_id, sessionId, contextDocs, db)
+      setSessionContextFingerprint(payload.workstream_id, sessionId, contextFingerprint, db)
 
       const existingReference =
         listChatReferences(payload.workstream_id, db).find((chat) => chat.conversation_uuid === sessionId) ?? null
@@ -539,7 +735,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('app:open-obsidian-note', async (_event, noteRef: unknown) => {
     const target = ensureString(noteRef, 'note ref')
-    const notePath = resolveObsidianNotePath(target)
+    const notePath = resolveObsidianReference(target)
     if (!notePath) {
       return { ok: false, error: `Could not find Obsidian note for [[${target}]]` }
     }
@@ -554,6 +750,27 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: fallbackError, path: notePath }
       }
       return { ok: true, path: notePath }
+    }
+  })
+
+  ipcMain.handle('app:pick-context-file', async (_event, options: unknown) => {
+    const parsed = parsePickContextFileOptions(options)
+    const result = await dialog.showOpenDialog({
+      title: 'Select context file',
+      properties: ['openFile'],
+      defaultPath: parsed.defaultPath ?? undefined
+    })
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return {
+        canceled: true,
+        path: null
+      }
+    }
+
+    return {
+      canceled: false,
+      path: result.filePaths[0]
     }
   })
 }

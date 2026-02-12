@@ -27,6 +27,13 @@ const api: ElectronApi = {
     link: (workstreamId, conversationUuid) => ipcRenderer.invoke('chat:link', workstreamId, conversationUuid),
     unlink: (workstreamId, conversationUuid) => ipcRenderer.invoke('chat:unlink', workstreamId, conversationUuid),
     getWorkstreamSession: (workstreamId) => ipcRenderer.invoke('chat:get-workstream-session', workstreamId),
+    getWorkstreamContext: (workstreamId) => ipcRenderer.invoke('chat:get-workstream-context', workstreamId),
+    setWorkstreamContext: (workstreamId, docs) => ipcRenderer.invoke('chat:set-workstream-context', workstreamId, docs),
+    getSessionContext: (workstreamId, conversationUuid) =>
+      ipcRenderer.invoke('chat:get-session-context', workstreamId, conversationUuid),
+    setSessionContext: (workstreamId, conversationUuid, docs) =>
+      ipcRenderer.invoke('chat:set-session-context', workstreamId, conversationUuid, docs),
+    resolveContextDocs: (docs) => ipcRenderer.invoke('chat:resolve-context-docs', docs),
     sendMessage: (input) => ipcRenderer.invoke('chat:send-message', input),
     cancelStream: (streamId) => ipcRenderer.invoke('chat:cancel-stream', streamId),
     onStreamEvent: (listener) => {
@@ -47,7 +54,8 @@ const api: ElectronApi = {
     diagnostics: () => ipcRenderer.invoke('sync:diagnostics')
   },
   app: {
-    openObsidianNote: (noteRef) => ipcRenderer.invoke('app:open-obsidian-note', noteRef)
+    openObsidianNote: (noteRef) => ipcRenderer.invoke('app:open-obsidian-note', noteRef),
+    pickContextFile: (options) => ipcRenderer.invoke('app:pick-context-file', options)
   }
 }
 
