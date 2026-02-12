@@ -1,6 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
-import type { ChatReference, ChatStreamEvent, ClaudeConversationPreviewMessage, ClaudePermissionMode } from '../../shared/types'
+import type {
+  ChatReference,
+  ChatStreamEvent,
+  ClaudeConversationPreviewMessage,
+  ClaudePermissionMode,
+  ContextDocInput,
+  ContextDocSource,
+  ResolveContextDocResult,
+  SessionContextDoc,
+  UpdateWorkstreamInput,
+  WorkstreamContextDoc,
+  WorkstreamStatus
+} from '../../shared/types'
 import { appApi } from '../api/app'
 import { chatApi } from '../api/chat'
 import {
@@ -11,20 +23,20 @@ import {
   useWorkstreamChatSession
 } from '../hooks/useChat'
 import { useRunSync, useSyncDiagnostics, useSyncSource } from '../hooks/useSync'
-import { useCreateTask, useDeleteTask, useUpdateTask } from '../hooks/useTasks'
 import { useUpdateWorkstream, useWorkstreamDetail } from '../hooks/useWorkstreams'
 import { formatDateTime, formatRelativeTime } from '../utils/time'
-import { TaskCard } from './TaskCard'
 import { ChatMessageContent } from './chat/ChatMessageContent'
 
 interface Props {
   workstreamId: number | null
 }
 
-type DetailTab = 'info' | 'tasks' | 'chat' | 'progress' | 'notes'
+type DetailTab = 'info' | 'chat' | 'context'
 
 type ToolUseKind = 'read' | 'edit' | 'bash' | 'grep' | 'question' | 'permission' | 'tool'
 const SUGGESTION_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
+const WORKFLOW_STATUS_OPTIONS: WorkstreamStatus[] = ['active', 'blocked', 'waiting', 'done']
+const RUN_DIRECTORY_PREFERRED_ROOTS = ['~/Projects', '~/Projects/playground-projects']
 
 interface ToolUseEntry {
   id: string
@@ -83,12 +95,6 @@ interface ConversationPreviewState {
   error: string | null
 }
 
-interface NotePart {
-  kind: 'text' | 'link'
-  value: string
-  target?: string
-}
-
 function parseSourcePath(config: string): string {
   try {
     const parsed = JSON.parse(config) as { path?: unknown }
@@ -98,30 +104,105 @@ function parseSourcePath(config: string): string {
   }
 }
 
-function parseObsidianNoteLine(line: string): NotePart[] {
-  const parts: NotePart[] = []
+function normalizeContextDocKey(doc: ContextDocInput): string {
+  const source = doc.source
+  const reference = doc.reference.trim()
+  if (source === 'obsidian') {
+    const body = reference.startsWith('[[') && reference.endsWith(']]') ? reference.slice(2, -2).trim() : reference
+    const [rawTarget] = body.split('|')
+    const target = (rawTarget ?? '').trim().replace(/\\/g, '/').replace(/\\.md$/i, '')
+    return `obsidian:${target.toLowerCase()}`
+  }
+
+  return `file:${reference}`
+}
+
+function extractLegacyObsidianContextDocs(notes: string | null | undefined): ContextDocInput[] {
+  if (!notes) {
+    return []
+  }
+
   const regex = /\[\[([^\]]+)\]\]/g
-  let lastIndex = 0
+  const docs: ContextDocInput[] = []
+  const seen = new Set<string>()
   let match: RegExpExecArray | null
 
-  while ((match = regex.exec(line)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ kind: 'text', value: line.slice(lastIndex, match.index) })
+  while ((match = regex.exec(notes)) !== null) {
+    const body = (match[1] ?? '').trim()
+    const [rawTarget] = body.split('|')
+    const target = (rawTarget ?? '').trim()
+    if (!target) {
+      continue
     }
 
-    const linkBody = match[1].trim()
-    const [rawTarget, rawLabel] = linkBody.split('|')
-    const target = rawTarget.trim()
-    const label = rawLabel?.trim() || target
-    parts.push({ kind: 'link', value: label, target })
-    lastIndex = regex.lastIndex
+    const doc: ContextDocInput = { source: 'obsidian', reference: target }
+    const key = normalizeContextDocKey(doc)
+    if (!key || seen.has(key)) {
+      continue
+    }
+
+    seen.add(key)
+    docs.push(doc)
   }
 
-  if (lastIndex < line.length) {
-    parts.push({ kind: 'text', value: line.slice(lastIndex) })
+  return docs
+}
+
+function renderContextReference(doc: ContextDocInput): string {
+  if (doc.source === 'obsidian') {
+    return `[[${doc.reference}]]`
   }
 
-  return parts.length > 0 ? parts : [{ kind: 'text', value: line }]
+  return doc.reference
+}
+
+function isOutsidePreferredRunRoots(directory: string): boolean {
+  const trimmed = directory.trim()
+  if (!trimmed) {
+    return false
+  }
+
+  const normalized = trimmed.replace(/\\/g, '/')
+  if (normalized === '~/Projects' || normalized.startsWith('~/Projects/')) {
+    return false
+  }
+
+  return !/^\/Users\/[^/]+\/Projects(?:\/|$)/.test(normalized)
+}
+
+function inferContextResolutionStatus(result: ResolveContextDocResult): 'ok' | 'missing' | 'invalid' {
+  if (result.exists) {
+    return 'ok'
+  }
+
+  const warning = (result.warning ?? '').toLowerCase()
+  if (warning.includes('invalid') || warning.includes('empty')) {
+    return 'invalid'
+  }
+
+  return 'missing'
+}
+
+function mapStoredContextDoc(
+  doc: Pick<SessionContextDoc, 'source' | 'reference' | 'normalized_reference' | 'resolved_path' | 'status'>
+): ResolveContextDocResult {
+  return {
+    source: doc.source,
+    reference: doc.reference,
+    normalized_reference: doc.normalized_reference,
+    resolved_path: doc.resolved_path,
+    exists: doc.status === 'ok',
+    warning: doc.status === 'ok' ? undefined : doc.status === 'missing' ? 'Document missing' : 'Document invalid'
+  }
+}
+
+function mapStoredContextDocsToInputs(
+  docs: Array<Pick<SessionContextDoc | WorkstreamContextDoc, 'source' | 'reference'>>
+): ContextDocInput[] {
+  return docs.map((doc) => ({
+    source: doc.source,
+    reference: doc.reference
+  }))
 }
 
 function getChatInitCwd(streamEvent: ChatStreamEvent): string | null {
@@ -467,15 +548,24 @@ function buildHistoryMessages(messages: ClaudeConversationPreviewMessage[]): Liv
 export function WorkstreamDetail({ workstreamId }: Props) {
   const [activeTab, setActiveTab] = useState<DetailTab>('info')
 
-  const [newTaskTitle, setNewTaskTitle] = useState('')
-  const [noteLinkError, setNoteLinkError] = useState<string | null>(null)
-  const [isEditingNotes, setIsEditingNotes] = useState(false)
-  const [noteDraft, setNoteDraft] = useState('')
+  const [contextUiError, setContextUiError] = useState<string | null>(null)
+  const [contextInputSource, setContextInputSource] = useState<ContextDocSource>('obsidian')
+  const [contextInputReference, setContextInputReference] = useState('')
+  const [isPickingContextFile, setIsPickingContextFile] = useState(false)
+  const [projectContextDocs, setProjectContextDocs] = useState<ContextDocInput[]>([])
+  const [projectContextResolutions, setProjectContextResolutions] = useState<ResolveContextDocResult[]>([])
+  const [projectContextLoaded, setProjectContextLoaded] = useState(false)
+  const [contextDocsByTab, setContextDocsByTab] = useState<Record<string, ContextDocInput[]>>({})
+  const [contextHydratedTabs, setContextHydratedTabs] = useState<Record<string, boolean>>({})
 
+  const [runDirectoryDraft, setRunDirectoryDraft] = useState('')
+  const [titleDraft, setTitleDraft] = useState('')
   const [priorityDraft, setPriorityDraft] = useState('')
   const [cadenceDraft, setCadenceDraft] = useState('')
+  const [statusDraft, setStatusDraft] = useState<WorkstreamStatus>('active')
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [settingsSaved, setSettingsSaved] = useState(false)
+  const [runDirectoryWarning, setRunDirectoryWarning] = useState<string | null>(null)
 
   const [chatInput, setChatInput] = useState('')
   const [chatMessagesByTab, setChatMessagesByTab] = useState<Record<string, LiveChatMessage[]>>({})
@@ -515,31 +605,11 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const runSyncMutation = useRunSync()
   const linkMutation = useLinkConversation()
   const unlinkMutation = useUnlinkConversation()
-  const createTaskMutation = useCreateTask(workstreamId ?? 0)
-  const updateTaskMutation = useUpdateTask(workstreamId ?? 0)
-  const deleteTaskMutation = useDeleteTask(workstreamId ?? 0)
   const updateSettingsMutation = useUpdateWorkstream()
-  const updateNotesMutation = useUpdateWorkstream()
 
   const detail = detailQuery.data
   const sourceId = sourceQuery.data?.id ?? null
   const sourcePath = sourceQuery.data ? parseSourcePath(sourceQuery.data.config) : ''
-
-  const activeTasks = useMemo(() => {
-    if (!detail) {
-      return []
-    }
-
-    return detail.tasks.filter((task) => task.status !== 'done')
-  }, [detail])
-
-  const nextTask = useMemo(() => {
-    if (activeTasks.length === 0) {
-      return null
-    }
-
-    return activeTasks.find((task) => task.status === 'in_progress') ?? activeTasks[0]
-  }, [activeTasks])
 
   const latestChat = useMemo(() => {
     if (!detail || detail.chats.length === 0) {
@@ -571,13 +641,12 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   }, [conversationsQuery.data, linkedConversationIds, globallyLinkedConversationIds, dismissedSuggestionIds])
 
   const nextActionText = detail?.workstream.next_action?.trim() || null
-  const nextActionSource = nextActionText
-    ? 'Source: workstream next_action'
-    : nextTask
-      ? 'Source: first active task'
-      : 'Source: none'
+  const nextActionSource = nextActionText ? 'Source: workstream next_action' : 'Source: none'
 
-  const noteLines = detail?.workstream.notes?.split('\n').filter((line) => line.trim().length > 0) ?? []
+  const legacyObsidianContextDocs = useMemo(
+    () => extractLegacyObsidianContextDocs(detail?.workstream.notes),
+    [detail?.workstream.notes]
+  )
 
   const activeChatTab = useMemo(() => {
     if (!activeChatTabId) {
@@ -601,6 +670,19 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const activeChatSendError = activeChatTabId ? (chatSendErrorsByTab[activeChatTabId] ?? null) : null
   const activePendingQuestion = activeChatTabId ? (pendingQuestionsByTab[activeChatTabId] ?? null) : null
   const activePendingPermission = activeChatTabId ? (pendingPermissionsByTab[activeChatTabId] ?? null) : null
+  const projectContextResolutionByKey = useMemo(
+    () => new Map(projectContextResolutions.map((entry) => [entry.normalized_reference, entry])),
+    [projectContextResolutions]
+  )
+  const activeContextDocs = activeChatTabId ? (contextDocsByTab[activeChatTabId] ?? projectContextDocs) : projectContextDocs
+  const activeContextKeySet = useMemo(
+    () => new Set(activeContextDocs.map((doc) => normalizeContextDocKey(doc))),
+    [activeContextDocs]
+  )
+  const projectContextWarnings = useMemo(
+    () => projectContextResolutions.map((entry) => entry.warning).filter((warning): warning is string => Boolean(warning)),
+    [projectContextResolutions]
+  )
   const activeTabLinkedChats = useMemo(() => {
     if (!detail || !activeChatConversationId) {
       return []
@@ -618,6 +700,15 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const priorityPercent = score ? Math.min(100, Math.max(0, (score.priority_score / 5) * 100)) : 0
   const stalenessPercent = score ? Math.min(100, Math.max(0, score.staleness_ratio * 100)) : 0
   const blockedPercent = score ? Math.min(100, Math.max(0, Math.abs(Math.min(0, score.blocked_penalty)) * 20)) : 0
+  const stalenessBasisLabel =
+    score?.staleness_basis === 'chat'
+      ? 'chat activity'
+      : score?.staleness_basis === 'session'
+        ? 'session activity'
+        : score?.staleness_basis === 'created'
+          ? 'created'
+          : 'progress'
+  const stalenessReferenceAt = score?.staleness_reference_at ?? detail?.workstream.created_at ?? null
 
   function setChatErrorForTab(tabId: string, error: string | null) {
     setChatSendErrorsByTab((previous) => {
@@ -712,6 +803,38 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     })
   }
 
+  async function refreshProjectContextResolutions(docs: ContextDocInput[]) {
+    if (docs.length === 0) {
+      setProjectContextResolutions([])
+      return
+    }
+
+    try {
+      const resolutions = await chatApi.resolveContextDocs(docs)
+      setProjectContextResolutions(resolutions)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not resolve context documents'
+      setContextUiError(message)
+    }
+  }
+
+  function setProjectContext(docs: ContextDocInput[], resolutions?: ResolveContextDocResult[]) {
+    setProjectContextDocs(docs)
+    if (resolutions) {
+      setProjectContextResolutions(resolutions)
+      return
+    }
+
+    void refreshProjectContextResolutions(docs)
+  }
+
+  function setContextDocsForTab(tabId: string, docs: ContextDocInput[]) {
+    setContextDocsByTab((previous) => ({
+      ...previous,
+      [tabId]: docs
+    }))
+  }
+
   function promoteActiveTabWithSession(sessionId: string) {
     const normalized = sessionId.trim()
     if (!normalized) {
@@ -789,22 +912,41 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   }, [isSendingChat])
 
   useEffect(() => {
-    if (detail && !isEditingNotes) {
-      setNoteDraft(detail.workstream.notes ?? '')
-    }
-  }, [detail, isEditingNotes])
-
-  useEffect(() => {
     if (!detail) {
       return
     }
 
+    const nextRunDirectory = detail.workstream.chat_run_directory ?? ''
+    setTitleDraft(detail.workstream.name)
+    setRunDirectoryDraft(nextRunDirectory)
     setPriorityDraft(String(detail.workstream.priority))
     setCadenceDraft(String(detail.workstream.target_cadence_days))
-  }, [detail?.workstream.id, detail?.workstream.priority, detail?.workstream.target_cadence_days])
+    setStatusDraft(detail.workstream.status)
+    setRunDirectoryWarning(
+      nextRunDirectory && isOutsidePreferredRunRoots(nextRunDirectory)
+        ? `Outside preferred roots (${RUN_DIRECTORY_PREFERRED_ROOTS.join(', ')}). This is allowed, but double-check it.`
+        : null
+    )
+  }, [
+    detail?.workstream.id,
+    detail?.workstream.chat_run_directory,
+    detail?.workstream.name,
+    detail?.workstream.priority,
+    detail?.workstream.target_cadence_days,
+    detail?.workstream.status
+  ])
 
   useEffect(() => {
     setActiveTab('info')
+    setContextUiError(null)
+    setContextInputSource('obsidian')
+    setContextInputReference('')
+    setIsPickingContextFile(false)
+    setProjectContextDocs([])
+    setProjectContextResolutions([])
+    setProjectContextLoaded(false)
+    setContextDocsByTab({})
+    setContextHydratedTabs({})
     setChatMessagesByTab({})
     setChatInput('')
     setChatSendErrorsByTab({})
@@ -839,6 +981,45 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     setChatSessionId(chatSessionQuery.data.session_id)
     setChatProjectCwd(chatSessionQuery.data.project_cwd)
   }, [chatSessionQuery.data])
+
+  useEffect(() => {
+    if (workstreamId === null) {
+      setProjectContext([])
+      setProjectContextLoaded(true)
+      return
+    }
+
+    let cancelled = false
+    setProjectContextLoaded(false)
+
+    void chatApi
+      .getWorkstreamContext(workstreamId)
+      .then((docs) => {
+        if (cancelled) {
+          return
+        }
+
+        setProjectContext(
+          mapStoredContextDocsToInputs(docs),
+          docs.map((doc) => mapStoredContextDoc(doc))
+        )
+        setProjectContextLoaded(true)
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return
+        }
+
+        const message = error instanceof Error ? error.message : 'Failed to load project context'
+        setContextUiError(message)
+        setProjectContext([], [])
+        setProjectContextLoaded(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [workstreamId])
 
   useEffect(() => {
     if (!detail) {
@@ -934,6 +1115,16 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       const next = pruneRecordByTab(previous)
       return hasSameKeys(previous, next) ? previous : next
     })
+
+    setContextDocsByTab((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
+
+    setContextHydratedTabs((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
   }, [chatTabs])
 
   useEffect(() => {
@@ -1026,6 +1217,82 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       cancelled = true
     }
   }, [activeChatTabId, activeChatConversationId, activeChatMessages.length])
+
+  useEffect(() => {
+    if (!projectContextLoaded || !activeChatTabId || !activeChatTab || contextHydratedTabs[activeChatTabId]) {
+      return
+    }
+
+    let cancelled = false
+
+    const tabId = activeChatTabId
+    const resumeSessionId = activeChatTab.resumeSessionId
+
+    if (!resumeSessionId || workstreamId === null) {
+      setContextDocsForTab(tabId, projectContextDocs)
+      setContextHydratedTabs((previous) => ({
+        ...previous,
+        [tabId]: true
+      }))
+      return
+    }
+
+    void chatApi
+      .getSessionContext(workstreamId, resumeSessionId)
+      .then((docs) => {
+        if (cancelled) {
+          return
+        }
+
+        const mappedDocs: ContextDocInput[] = docs.map((doc) => ({
+          source: doc.source,
+          reference: doc.reference
+        }))
+
+        const projectKeys = new Set(projectContextDocs.map((doc) => normalizeContextDocKey(doc)))
+        const missingProjectDocs = mappedDocs.filter((doc) => !projectKeys.has(normalizeContextDocKey(doc)))
+        if (missingProjectDocs.length > 0) {
+          const mergedProjectDocs = [...projectContextDocs]
+          for (const doc of missingProjectDocs) {
+            if (mergedProjectDocs.some((entry) => normalizeContextDocKey(entry) === normalizeContextDocKey(doc))) {
+              continue
+            }
+            mergedProjectDocs.push(doc)
+          }
+          setProjectContext(mergedProjectDocs)
+          void persistProjectContext(workstreamId, mergedProjectDocs)
+        }
+
+        setContextDocsForTab(tabId, mappedDocs.length > 0 ? mappedDocs : projectContextDocs)
+        setContextHydratedTabs((previous) => ({
+          ...previous,
+          [tabId]: true
+        }))
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return
+        }
+
+        const message = error instanceof Error ? error.message : 'Failed to load session context'
+        setContextUiError(message)
+        setContextHydratedTabs((previous) => ({
+          ...previous,
+          [tabId]: true
+        }))
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeChatTab,
+    activeChatTabId,
+    contextHydratedTabs,
+    projectContextDocs,
+    projectContextLoaded,
+    workstreamId
+  ])
 
   useEffect(() => {
     const unsubscribe = chatApi.onStreamEvent((streamEvent) => {
@@ -1293,32 +1560,6 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     )
   }
 
-  async function handleCreateTask(event: FormEvent) {
-    event.preventDefault()
-    if (!newTaskTitle.trim() || workstreamId === null) {
-      return
-    }
-
-    await createTaskMutation.mutateAsync(newTaskTitle.trim())
-    setNewTaskTitle('')
-  }
-
-  function handleStartTask(taskId: number) {
-    if (workstreamId === null) {
-      return
-    }
-
-    updateTaskMutation.mutate({ id: taskId, data: { status: 'in_progress' } })
-  }
-
-  async function handleCompleteTask(taskId: number) {
-    await deleteTaskMutation.mutateAsync(taskId)
-  }
-
-  async function handleDeleteTask(taskId: number) {
-    await deleteTaskMutation.mutateAsync(taskId)
-  }
-
   async function handleLinkConversation(conversationUuid: string) {
     if (workstreamId === null) {
       return
@@ -1345,26 +1586,11 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   }
 
   async function handleOpenObsidianNote(noteRef: string) {
-    setNoteLinkError(null)
+    setContextUiError(null)
     const result = await appApi.openObsidianNote(noteRef)
     if (!result.ok) {
-      setNoteLinkError(result.error ?? `Could not open [[${noteRef}]]`)
+      setContextUiError(result.error ?? `Could not open [[${noteRef}]]`)
     }
-  }
-
-  async function handleSaveNotes() {
-    if (!detail) {
-      return
-    }
-
-    await updateNotesMutation.mutateAsync({
-      id: detail.workstream.id,
-      data: {
-        notes: noteDraft.trim() ? noteDraft : null
-      }
-    })
-
-    setIsEditingNotes(false)
   }
 
   async function handleSaveWorkstreamSettings() {
@@ -1372,10 +1598,19 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       return
     }
 
+    const nextTitle = titleDraft.trim()
+    const nextRunDirectory = runDirectoryDraft.trim() ? runDirectoryDraft.trim() : null
     const parsedPriority = Number(priorityDraft)
     const parsedCadence = Number(cadenceDraft)
+    const nextStatus = statusDraft
     const nextPriority = Math.round(parsedPriority)
     const nextCadence = Math.round(parsedCadence)
+
+    if (!nextTitle) {
+      setSettingsError('Title must not be empty.')
+      setSettingsSaved(false)
+      return
+    }
 
     if (!Number.isFinite(parsedPriority) || nextPriority < 1 || nextPriority > 5) {
       setSettingsError('Priority must be between 1 and 5.')
@@ -1389,23 +1624,98 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       return
     }
 
-    setSettingsError(null)
-    setSettingsSaved(false)
-
-    if (nextPriority === detail.workstream.priority && nextCadence === detail.workstream.target_cadence_days) {
+    if (!WORKFLOW_STATUS_OPTIONS.includes(nextStatus)) {
+      setSettingsError('Workflow status is invalid.')
+      setSettingsSaved(false)
       return
     }
 
-    await updateSettingsMutation.mutateAsync({
-      id: detail.workstream.id,
-      data: {
-        priority: nextPriority,
-        target_cadence_days: nextCadence
-      }
-    })
+    setSettingsError(null)
+    setSettingsSaved(false)
+    setRunDirectoryWarning(
+      nextRunDirectory && isOutsidePreferredRunRoots(nextRunDirectory)
+        ? `Outside preferred roots (${RUN_DIRECTORY_PREFERRED_ROOTS.join(', ')}). This is allowed, but double-check it.`
+        : null
+    )
 
+    const hasTitleChanged = nextTitle !== detail.workstream.name
+    const hasRunDirectoryChanged = nextRunDirectory !== (detail.workstream.chat_run_directory ?? null)
+    const hasPriorityChanged = nextPriority !== detail.workstream.priority
+    const hasCadenceChanged = nextCadence !== detail.workstream.target_cadence_days
+    const hasStatusChanged = nextStatus !== detail.workstream.status
+
+    if (!hasTitleChanged && !hasRunDirectoryChanged && !hasPriorityChanged && !hasCadenceChanged && !hasStatusChanged) {
+      return
+    }
+
+    const updatePayload: UpdateWorkstreamInput = {}
+    if (hasTitleChanged) {
+      updatePayload.name = nextTitle
+    }
+    if (hasRunDirectoryChanged) {
+      updatePayload.chat_run_directory = nextRunDirectory
+    }
+    if (hasPriorityChanged) {
+      updatePayload.priority = nextPriority
+    }
+    if (hasCadenceChanged) {
+      updatePayload.target_cadence_days = nextCadence
+    }
+    if (hasStatusChanged) {
+      updatePayload.status = nextStatus
+    }
+
+    try {
+      await updateSettingsMutation.mutateAsync({
+        id: detail.workstream.id,
+        data: updatePayload
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not save settings'
+      setSettingsError(message)
+      setSettingsSaved(false)
+      return
+    }
+
+    setTitleDraft(nextTitle)
+    setRunDirectoryDraft(nextRunDirectory ?? '')
     setPriorityDraft(String(nextPriority))
     setCadenceDraft(String(nextCadence))
+    setStatusDraft(nextStatus)
+    setSettingsSaved(true)
+    window.setTimeout(() => {
+      setSettingsSaved(false)
+    }, 1200)
+  }
+
+  async function handleSetWorkflowStatus(nextStatus: WorkstreamStatus) {
+    if (!detail || updateSettingsMutation.isPending) {
+      return
+    }
+
+    if (nextStatus === detail.workstream.status) {
+      setStatusDraft(nextStatus)
+      return
+    }
+
+    setSettingsError(null)
+    setSettingsSaved(false)
+
+    try {
+      await updateSettingsMutation.mutateAsync({
+        id: detail.workstream.id,
+        data: {
+          status: nextStatus
+        }
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not update workflow status'
+      setSettingsError(message)
+      setSettingsSaved(false)
+      return
+    }
+
+    setStatusDraft(nextStatus)
     setSettingsSaved(true)
     window.setTimeout(() => {
       setSettingsSaved(false)
@@ -1567,6 +1877,181 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     })
   }
 
+  async function persistContextForSession(
+    workstream: number,
+    conversationUuid: string,
+    docs: ContextDocInput[]
+  ) {
+    try {
+      await chatApi.setSessionContext(workstream, conversationUuid, docs)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to persist session context'
+      setContextUiError(message)
+    }
+  }
+
+  async function persistProjectContext(workstream: number, docs: ContextDocInput[]) {
+    try {
+      const saved = await chatApi.setWorkstreamContext(workstream, docs)
+      const mappedDocs = mapStoredContextDocsToInputs(saved)
+      setProjectContext(
+        mappedDocs,
+        saved.map((doc) => mapStoredContextDoc(doc))
+      )
+
+      const allowedKeys = new Set(mappedDocs.map((doc) => normalizeContextDocKey(doc)))
+      setContextDocsByTab((previous) => {
+        let changed = false
+        const next: Record<string, ContextDocInput[]> = {}
+        for (const [tabId, tabDocs] of Object.entries(previous)) {
+          const filtered = tabDocs.filter((doc) => allowedKeys.has(normalizeContextDocKey(doc)))
+          if (filtered.length !== tabDocs.length) {
+            changed = true
+          }
+          next[tabId] = filtered
+        }
+        return changed ? next : previous
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to persist project context'
+      setContextUiError(message)
+    }
+  }
+
+  function handleContextInputSourceChange(nextSource: ContextDocSource) {
+    setContextInputSource(nextSource)
+  }
+
+  function handleContextInputReferenceChange(nextReference: string) {
+    setContextInputReference(nextReference)
+  }
+
+  function handleRunDirectoryDraftChange(nextValue: string) {
+    setRunDirectoryDraft(nextValue)
+    const normalized = nextValue.trim()
+    setRunDirectoryWarning(
+      normalized && isOutsidePreferredRunRoots(normalized)
+        ? `Outside preferred roots (${RUN_DIRECTORY_PREFERRED_ROOTS.join(', ')}). This is allowed, but double-check it.`
+        : null
+    )
+  }
+
+  async function handleAddContextDocument(docInput?: ContextDocInput) {
+    if (workstreamId === null) {
+      return
+    }
+
+    const source = docInput?.source ?? contextInputSource
+    const reference = (docInput?.reference ?? contextInputReference).trim()
+    if (!reference) {
+      return
+    }
+
+    const doc: ContextDocInput = {
+      source,
+      reference
+    }
+    const key = normalizeContextDocKey(doc)
+    const existing = projectContextDocs
+    if (existing.some((entry) => normalizeContextDocKey(entry) === key)) {
+      setContextInputReference('')
+      return
+    }
+
+    const nextDocs = [...existing, doc]
+    setProjectContext(nextDocs)
+    setContextInputReference('')
+    setContextUiError(null)
+
+    await persistProjectContext(workstreamId, nextDocs)
+  }
+
+  async function handleRemoveContextDocument(index: number) {
+    if (workstreamId === null) {
+      return
+    }
+
+    const existing = projectContextDocs
+    if (index < 0 || index >= existing.length) {
+      return
+    }
+
+    const nextDocs = existing.filter((_doc, docIndex) => docIndex !== index)
+    setProjectContext(nextDocs)
+    setContextUiError(null)
+
+    await persistProjectContext(workstreamId, nextDocs)
+  }
+
+  async function handleAddLegacyContextDoc(doc: ContextDocInput) {
+    await handleAddContextDocument(doc)
+  }
+
+  async function setActiveTopicContextDocs(nextDocs: ContextDocInput[]) {
+    if (!activeChatTabId || workstreamId === null) {
+      return
+    }
+
+    setContextDocsForTab(activeChatTabId, nextDocs)
+    const activeTab = chatTabs.find((tab) => tab.id === activeChatTabId)
+    if (activeTab?.resumeSessionId) {
+      await persistContextForSession(workstreamId, activeTab.resumeSessionId, nextDocs)
+    }
+  }
+
+  async function handleToggleActiveTopicContextDoc(doc: ContextDocInput, checked: boolean) {
+    const key = normalizeContextDocKey(doc)
+    const existing = activeContextDocs
+    const filtered = existing.filter((entry) => normalizeContextDocKey(entry) !== key)
+    const nextDocs = checked ? [...filtered, doc] : filtered
+    await setActiveTopicContextDocs(nextDocs)
+  }
+
+  async function handleSelectAllActiveTopicContextDocs() {
+    await setActiveTopicContextDocs(projectContextDocs)
+  }
+
+  async function handleClearActiveTopicContextDocs() {
+    await setActiveTopicContextDocs([])
+  }
+
+  async function handlePickContextFile() {
+    if (contextInputSource !== 'file' || isPickingContextFile) {
+      return
+    }
+
+    setContextUiError(null)
+    setIsPickingContextFile(true)
+
+    try {
+      const defaultPath =
+        contextInputReference.trim() ||
+        runDirectoryDraft.trim() ||
+        detail?.workstream.chat_run_directory ||
+        chatProjectCwd ||
+        null
+      const selection = await appApi.pickContextFile({ defaultPath })
+      if (selection.canceled || !selection.path) {
+        return
+      }
+
+      if (workstreamId === null) {
+        setContextInputReference(selection.path)
+        return
+      }
+
+      await handleAddContextDocument({
+        source: 'file',
+        reference: selection.path
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not open file picker'
+      setContextUiError(message)
+    } finally {
+      setIsPickingContextFile(false)
+    }
+  }
+
   async function handleSendChatMessage(overrides?: { message?: string; permissionMode?: ClaudePermissionMode | null }) {
     if (workstreamId === null || isSendingChat) {
       return
@@ -1590,6 +2075,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     const userMessageId = createChatMessageId('user')
     const assistantMessageId = createChatMessageId('assistant')
     const activeTabSessionId = targetTab.resumeSessionId
+    const activeTabContextDocs = contextDocsByTab[targetTabId] ?? projectContextDocs
     const allowWorkstreamSessionFallback = targetTab.kind !== 'new'
 
     if (!overrides?.message) {
@@ -1616,19 +2102,23 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     }))
 
     try {
-      const result = await chatApi.sendMessage({
+      const chatPayload: Parameters<typeof chatApi.sendMessage>[0] = {
         workstream_id: workstreamId,
         message,
         resume_session_id: activeTabSessionId,
         allow_workstream_session_fallback: allowWorkstreamSessionFallback,
-        permission_mode: overrides?.permissionMode ?? null
-      })
+        permission_mode: overrides?.permissionMode ?? null,
+        context_docs: activeTabContextDocs
+      }
+
+      const result = await chatApi.sendMessage(chatPayload)
 
       streamTabLookupRef.current[result.stream_id] = targetTabId
 
       if (result.session_id) {
         setChatSessionId(result.session_id)
         promoteActiveTabWithSession(result.session_id)
+        await persistContextForSession(workstreamId, result.session_id, activeTabContextDocs)
       }
 
       const fallbackText = result.assistant_text || result.result_text || 'No response text returned.'
@@ -1753,30 +2243,6 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     await chatApi.cancelStream(activeStreamId)
   }
 
-  function renderObsidianLine(line: string, lineIndex: number) {
-    return (
-      <li key={`${line}-${lineIndex}`}>
-        {parseObsidianNoteLine(line).map((part, partIndex) => {
-          if (part.kind === 'link' && part.target) {
-            const target = part.target
-            return (
-              <button
-                key={`${part.value}-${partIndex}`}
-                type="button"
-                className="note-link"
-                onClick={() => void handleOpenObsidianNote(target)}
-              >
-                {part.value}
-              </button>
-            )
-          }
-
-          return <span key={`${part.value}-${partIndex}`}>{part.value}</span>
-        })}
-      </li>
-    )
-  }
-
   function renderLinkedSessionsList(chats: ChatReference[], mode: 'full' | 'compact', emptyMessage: string) {
     return (
       <div className={`chat-secondary-list ${mode === 'compact' ? 'chat-secondary-list-compact' : ''}`}>
@@ -1854,13 +2320,6 @@ export function WorkstreamDetail({ workstreamId }: Props) {
           </button>
           <button
             type="button"
-            className={`detail-tab ${activeTab === 'tasks' ? 'active' : ''}`}
-            onClick={() => setActiveTab('tasks')}
-          >
-            Tasks
-          </button>
-          <button
-            type="button"
             className={`detail-tab ${activeTab === 'chat' ? 'active' : ''}`}
             onClick={() => {
               setActiveTab('chat')
@@ -1871,17 +2330,10 @@ export function WorkstreamDetail({ workstreamId }: Props) {
           </button>
           <button
             type="button"
-            className={`detail-tab ${activeTab === 'progress' ? 'active' : ''}`}
-            onClick={() => setActiveTab('progress')}
+            className={`detail-tab ${activeTab === 'context' ? 'active' : ''}`}
+            onClick={() => setActiveTab('context')}
           >
-            Progress
-          </button>
-          <button
-            type="button"
-            className={`detail-tab ${activeTab === 'notes' ? 'active' : ''}`}
-            onClick={() => setActiveTab('notes')}
-          >
-            Notes
+            Context
           </button>
         </div>
       </header>
@@ -1925,7 +2377,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
             <section className="info-section">
               <div className="info-section-header">Next Action</div>
               <div className="next-action-card">
-                <p className="next-action-text">{nextActionText ?? nextTask?.title ?? 'No active tasks. Add one in Tasks tab.'}</p>
+                <p className="next-action-text">{nextActionText ?? 'No next action set.'}</p>
                 <p className="next-action-source">{nextActionSource}</p>
               </div>
             </section>
@@ -1960,6 +2412,33 @@ export function WorkstreamDetail({ workstreamId }: Props) {
             <section className="info-section">
               <div className="info-section-header">Settings</div>
               <div className="settings-grid">
+                <div className="setting-card setting-card-wide">
+                  <div className="setting-label">Title</div>
+                  <div className="setting-edit-row">
+                    <input
+                      type="text"
+                      className="setting-input-wide"
+                      value={titleDraft}
+                      onChange={(event) => setTitleDraft(event.target.value)}
+                      onKeyDown={handleSettingsInputKeyDown}
+                    />
+                  </div>
+                </div>
+
+                <div className="setting-card setting-card-wide">
+                  <div className="setting-label">Project Run Directory</div>
+                  <div className="setting-edit-row">
+                    <input
+                      type="text"
+                      className="setting-input-wide"
+                      value={runDirectoryDraft}
+                      onChange={(event) => handleRunDirectoryDraftChange(event.target.value)}
+                      onKeyDown={handleSettingsInputKeyDown}
+                      placeholder="~/Projects/my-project"
+                    />
+                  </div>
+                </div>
+
                 <div className="setting-card">
                   <div className="setting-label">Priority</div>
                   <div className="setting-edit-row">
@@ -1969,7 +2448,6 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                       max={5}
                       value={priorityDraft}
                       onChange={(event) => setPriorityDraft(event.target.value)}
-                      onBlur={() => void handleSaveWorkstreamSettings()}
                       onKeyDown={handleSettingsInputKeyDown}
                     />
                     <span className="setting-unit">/ 5</span>
@@ -1985,7 +2463,6 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                       max={365}
                       value={cadenceDraft}
                       onChange={(event) => setCadenceDraft(event.target.value)}
-                      onBlur={() => void handleSaveWorkstreamSettings()}
                       onKeyDown={handleSettingsInputKeyDown}
                     />
                     <span className="setting-unit">days</span>
@@ -1993,8 +2470,22 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                 </div>
 
                 <div className="setting-card">
-                  <div className="setting-label">Last Progress</div>
-                  <div className="setting-value setting-value-small">{formatRelativeTime(detail.workstream.last_progress_at)}</div>
+                  <div className="setting-label">Workflow Status</div>
+                  <div className="setting-edit-row">
+                    <select value={statusDraft} onChange={(event) => setStatusDraft(event.target.value as WorkstreamStatus)}>
+                      {WORKFLOW_STATUS_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="setting-card">
+                  <div className="setting-label">Last Activity</div>
+                  <div className="setting-value setting-value-small">{formatRelativeTime(stalenessReferenceAt)}</div>
+                  <div className="setting-note">Basis: {stalenessBasisLabel}</div>
                 </div>
 
                 <div className="setting-card">
@@ -2005,27 +2496,56 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                   </div>
                 </div>
               </div>
+              {runDirectoryWarning && <p className="detail-inline-warning">{runDirectoryWarning}</p>}
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="setting-action-button"
+                  onClick={() => void handleSaveWorkstreamSettings()}
+                  disabled={updateSettingsMutation.isPending}
+                >
+                  {updateSettingsMutation.isPending ? 'Saving...' : 'Save Settings'}
+                </button>
+                {detail.workstream.status === 'done' ? (
+                  <button
+                    type="button"
+                    className="setting-action-button"
+                    onClick={() => void handleSetWorkflowStatus('active')}
+                    disabled={updateSettingsMutation.isPending}
+                  >
+                    Unarchive Workflow
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="setting-action-button setting-action-warning"
+                    onClick={() => void handleSetWorkflowStatus('done')}
+                    disabled={updateSettingsMutation.isPending}
+                  >
+                    Archive Workflow
+                  </button>
+                )}
+              </div>
               {settingsError && <p className="detail-inline-error">{settingsError}</p>}
               {!settingsError && settingsSaved && <p className="detail-inline-success">Saved</p>}
             </section>
 
             <section className="info-section">
-              <div className="info-section-header">Recent Progress</div>
-              <div className="progress-list">
-                {detail.progress.map((update) => (
-                  <article key={update.id} className="progress-item">
-                    <div className="progress-note">{update.note}</div>
-                    <div className="progress-time">{formatRelativeTime(update.created_at)}</div>
-                  </article>
-                ))}
-                {detail.progress.length === 0 && <p className="section-empty">No progress updates yet.</p>}
-              </div>
-            </section>
-
-            <section className="info-section">
-              <div className="info-section-header">Notes</div>
-              {noteLines.length > 0 ? <ul className="notes-list">{noteLines.map(renderObsidianLine)}</ul> : <p className="section-empty">No notes yet.</p>}
-              {noteLinkError && <p className="note-link-error">{noteLinkError}</p>}
+              <div className="info-section-header">Legacy Context Links</div>
+              {legacyObsidianContextDocs.length > 0 ? (
+                <div className="context-legacy-list">
+                  {legacyObsidianContextDocs.map((doc) => (
+                    <div key={normalizeContextDocKey(doc)} className="context-legacy-item">
+                      <button type="button" className="note-link" onClick={() => void handleOpenObsidianNote(doc.reference)}>
+                        {renderContextReference(doc)}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="section-empty">No legacy Obsidian links found in stored notes.</p>
+              )}
+              {contextUiError && <p className="note-link-error">{contextUiError}</p>}
             </section>
           </div>
         </div>
@@ -2149,62 +2669,55 @@ export function WorkstreamDetail({ workstreamId }: Props) {
 
               {!hasChatActivity ? (
                 <section className="chat-secondary-panel">
-                  <div className="chat-secondary-card">
-                    <div className="chat-secondary-title">Runtime</div>
-                    <p className="source-note">Model: claude-opus-4-6 via Max</p>
-                    <p className="source-note">cwd: {chatProjectCwd ?? 'Not resolved yet'}</p>
-                    <p className="source-note">Source path: {sourcePath || 'Not configured'}</p>
-                    <p className="source-note">
-                      {diagnosticsQuery.isLoading
-                        ? 'Checking Claude session index...'
-                        : diagnosticsQuery.data?.exists
-                          ? 'Claude source connected'
-                          : 'Claude source unavailable'}
-                    </p>
-                    <button
-                      type="button"
-                      className="sidebar-control"
-                      onClick={() => void handleRunSync()}
-                      disabled={!sourceId || runSyncMutation.isPending}
-                    >
-                      {runSyncMutation.isPending ? 'Syncing...' : 'Sync Claude now'}
-                    </button>
-                  </div>
-
-                  <div className="chat-secondary-card">
-                    <div className="chat-secondary-title">Suggested Sessions</div>
-                    <div className="chat-secondary-list">
-                      {suggestedConversations.map((conversation) => (
-                        <article key={conversation.conversation_uuid} className="chat-item">
-                          <div>
-                            <strong>{conversation.title ?? conversation.conversation_uuid}</strong>
-                            {conversation.last_user_message && <p>{conversation.last_user_message}</p>}
-                            <time>{formatDateTime(conversation.chat_timestamp)}</time>
-                          </div>
-                          <div className="chat-item-actions">
-                            <button
-                              type="button"
-                              className="chat-item-dismiss"
-                              aria-label="Dismiss suggestion"
-                              onClick={() => handleDismissSuggestion(conversation.conversation_uuid)}
-                              disabled={linkMutation.isPending}
-                            >
-                              ×
-                            </button>
-                            <button
-                              type="button"
-                              className="chat-item-action"
-                              onClick={() => void handleLinkConversation(conversation.conversation_uuid)}
-                              disabled={linkMutation.isPending}
-                            >
-                              Link
-                            </button>
-                          </div>
-                        </article>
-                      ))}
-                      {suggestedConversations.length === 0 && <p className="section-empty">No unlinked recent Claude sessions found.</p>}
+                  <section className="chat-context-picker">
+                    <div className="chat-secondary-title">Context for This Topic</div>
+                    <div className="chat-context-picker-actions">
+                      <button
+                        type="button"
+                        className="chat-item-action"
+                        onClick={() => void handleSelectAllActiveTopicContextDocs()}
+                        disabled={projectContextDocs.length === 0 || isSendingChat}
+                      >
+                        Select All
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-item-action"
+                        onClick={() => void handleClearActiveTopicContextDocs()}
+                        disabled={activeContextDocs.length === 0 || isSendingChat}
+                      >
+                        Clear
+                      </button>
                     </div>
-                  </div>
+                    <div className="chat-context-picker-list">
+                      {projectContextDocs.map((doc, index) => {
+                        const key = normalizeContextDocKey(doc)
+                        const resolution = projectContextResolutionByKey.get(key)
+                        const status: 'ok' | 'missing' | 'invalid' = resolution
+                          ? resolution.exists
+                            ? 'ok'
+                            : inferContextResolutionStatus(resolution)
+                          : 'invalid'
+                        const checked = activeContextKeySet.has(key)
+
+                        return (
+                          <label key={`${key}-${index}`} className={`chat-context-picker-item context-item-${status}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) => void handleToggleActiveTopicContextDoc(doc, event.target.checked)}
+                              disabled={isSendingChat}
+                            />
+                            <span className="chat-context-picker-label">{renderContextReference(doc)}</span>
+                            <span className={`context-status-badge ${status}`}>{status}</span>
+                          </label>
+                        )
+                      })}
+                      {projectContextDocs.length === 0 && (
+                        <p className="section-empty">No project context docs configured yet. Add them in the Context tab.</p>
+                      )}
+                    </div>
+                  </section>
 
                   <div className="chat-secondary-card">
                     <div className="chat-secondary-title">Linked Sessions</div>
@@ -2321,94 +2834,100 @@ export function WorkstreamDetail({ workstreamId }: Props) {
         </div>
       )}
 
-      {activeTab === 'tasks' && (
+      {activeTab === 'context' && (
         <div className="tab-panel">
-          <div className="tab-panel-header">Tasks</div>
+          <div className="tab-panel-header">Context</div>
+          <div className="context-panel">
+            <div className="context-meta">
+              <span>Project docs: {projectContextDocs.length}</span>
+              <span>Active topic selection: {activeContextDocs.length}</span>
+            </div>
 
-          <form className="task-create" onSubmit={handleCreateTask}>
-            <input value={newTaskTitle} onChange={(event) => setNewTaskTitle(event.target.value)} placeholder="Add task" required />
-            <button type="submit" disabled={createTaskMutation.isPending}>
-              Add
-            </button>
-          </form>
-
-          <div className="task-list">
-            {activeTasks.map((task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                onStart={handleStartTask}
-                onComplete={(taskId) => void handleCompleteTask(taskId)}
-                onDelete={(taskId) => void handleDeleteTask(taskId)}
+            <div className="context-add-row">
+              <select value={contextInputSource} onChange={(event) => handleContextInputSourceChange(event.target.value as ContextDocSource)}>
+                <option value="obsidian">Obsidian</option>
+                <option value="file">File</option>
+              </select>
+              <input
+                value={contextInputReference}
+                onChange={(event) => handleContextInputReferenceChange(event.target.value)}
+                placeholder={contextInputSource === 'obsidian' ? 'Vault/Note or [[Vault/Note]]' : '/absolute/path/to/file.md'}
               />
-            ))}
-            {activeTasks.length === 0 && <p className="section-empty">No active tasks. Add one above.</p>}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'progress' && (
-        <div className="tab-panel">
-          <div className="tab-panel-header">Progress</div>
-          <div className="progress-list">
-            {detail.progress.map((update) => (
-              <article key={update.id} className="progress-item">
-                <div className="progress-note">{update.note}</div>
-                <div className="progress-time">{formatDateTime(update.created_at)}</div>
-              </article>
-            ))}
-            {detail.progress.length === 0 && <p className="section-empty">No progress updates yet.</p>}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'notes' && (
-        <div className="tab-panel">
-          <div className="tab-panel-header">Notes</div>
-          <div className="notes-toolbar">
-            {!isEditingNotes ? (
-              <button type="button" className="notes-edit-toggle" onClick={() => setIsEditingNotes(true)}>
-                Edit
+              {contextInputSource === 'file' && (
+                <button type="button" onClick={() => void handlePickContextFile()} disabled={isPickingContextFile}>
+                  {isPickingContextFile ? 'Opening...' : 'Browse'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleAddContextDocument()}
+                disabled={!contextInputReference.trim() || isPickingContextFile}
+              >
+                Add
               </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="notes-edit-toggle"
-                  onClick={() => {
-                    setNoteDraft(detail.workstream.notes ?? '')
-                    setIsEditingNotes(false)
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="notes-edit-toggle notes-save-toggle"
-                  onClick={() => void handleSaveNotes()}
-                  disabled={updateNotesMutation.isPending}
-                >
-                  {updateNotesMutation.isPending ? 'Saving...' : 'Save'}
-                </button>
-              </>
+            </div>
+
+            <div className="context-list">
+              {projectContextDocs.map((doc, index) => {
+                const key = normalizeContextDocKey(doc)
+                const resolution = projectContextResolutionByKey.get(key)
+                const status: 'ok' | 'missing' | 'invalid' = resolution
+                  ? resolution.exists
+                    ? 'ok'
+                    : inferContextResolutionStatus(resolution)
+                  : 'invalid'
+
+                return (
+                  <article key={`${key}-${index}`} className={`context-item context-item-${status}`}>
+                    <div className="context-item-main">
+                      <strong>{renderContextReference(doc)}</strong>
+                      <p>{resolution?.resolved_path ?? 'Unresolved path'}</p>
+                    </div>
+                    <div className="context-item-actions">
+                      <span className={`context-status-badge ${status}`}>{status}</span>
+                      {doc.source === 'obsidian' && (
+                        <button type="button" className="chat-item-action" onClick={() => void handleOpenObsidianNote(doc.reference)}>
+                          Open
+                        </button>
+                      )}
+                      <button type="button" className="chat-item-action" onClick={() => void handleRemoveContextDocument(index)}>
+                        Remove
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
+              {projectContextDocs.length === 0 && <p className="section-empty">No project context docs yet.</p>}
+            </div>
+
+            {legacyObsidianContextDocs.length > 0 && (
+              <div className="context-legacy">
+                <div className="chat-secondary-title">Auto-discovered from legacy notes</div>
+                <div className="context-legacy-list">
+                  {legacyObsidianContextDocs.map((doc) => (
+                    <div key={normalizeContextDocKey(doc)} className="context-legacy-item">
+                      <span>{renderContextReference(doc)}</span>
+                      <button type="button" className="chat-item-action" onClick={() => void handleAddLegacyContextDoc(doc)}>
+                        Add to session
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
+
+            {projectContextWarnings.length > 0 && (
+              <div className="context-warnings">
+                {projectContextWarnings.map((warning, index) => (
+                  <p key={`${warning}-${index}`} className="detail-inline-warning">
+                    {warning}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {contextUiError && <p className="detail-inline-error">{contextUiError}</p>}
           </div>
-
-          {isEditingNotes ? (
-            <textarea
-              className="notes-editor"
-              value={noteDraft}
-              onChange={(event) => setNoteDraft(event.target.value)}
-              placeholder="Add notes... use [[My Note]] or [[Folder/Note|Label]]"
-              rows={8}
-            />
-          ) : noteLines.length > 0 ? (
-            <ul className="notes-list">{noteLines.map(renderObsidianLine)}</ul>
-          ) : (
-            <p className="section-empty">No notes yet.</p>
-          )}
-
-          {noteLinkError && <p className="note-link-error">{noteLinkError}</p>}
         </div>
       )}
     </section>

@@ -1,7 +1,7 @@
 interface Props {
   stalenessRatio: number
   daysSinceProgress: number
-  stalenessBasis: 'progress' | 'created'
+  stalenessBasis: 'progress' | 'chat' | 'session' | 'created'
 }
 
 function getStalenessTone(stalenessRatio: number): 'fresh' | 'warning' | 'overdue' {
@@ -22,8 +22,12 @@ export function StalenessIndicator({ stalenessRatio, daysSinceProgress, stalenes
   const roundedDays = Math.round(daysSinceProgress)
   const label =
     stalenessBasis === 'created'
-      ? `${roundedDays}d since created (no progress yet)`
-      : `${roundedDays}d since progress`
+      ? `${roundedDays}d since created (no activity yet)`
+      : stalenessBasis === 'chat'
+        ? `${roundedDays}d since chat activity`
+        : stalenessBasis === 'session'
+          ? `${roundedDays}d since session activity`
+          : `${roundedDays}d since progress`
 
   return (
     <span className="staleness-indicator" title={label} aria-label={label}>

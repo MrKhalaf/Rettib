@@ -5,26 +5,30 @@ import { WorkstreamCard } from './WorkstreamCard'
 
 interface Props {
   workstreams: WorkstreamListItem[]
+  archivedCount: number
+  showArchived: boolean
   isLoading: boolean
   errorMessage?: string | null
   selectedWorkstreamId: number | null
   onSelectWorkstream: (id: number) => void
   onCreateWorkstream: (data: CreateWorkstreamInput) => Promise<void>
   onOpenQuickCapture: () => void
-  onOpenSync: () => void
+  onToggleShowArchived: () => void
 }
 
 const STATUS_OPTIONS: WorkstreamStatus[] = ['active', 'blocked', 'waiting', 'done']
 
 export function Dashboard({
   workstreams,
+  archivedCount,
+  showArchived,
   isLoading,
   errorMessage,
   selectedWorkstreamId,
   onSelectWorkstream,
   onCreateWorkstream,
   onOpenQuickCapture,
-  onOpenSync
+  onToggleShowArchived
 }: Props) {
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
@@ -70,9 +74,6 @@ export function Dashboard({
         </button>
         <button type="button" className="sidebar-control" onClick={onOpenQuickCapture}>
           Quick Capture
-        </button>
-        <button type="button" className="sidebar-control" onClick={onOpenSync}>
-          Sync
         </button>
       </div>
 
@@ -133,7 +134,7 @@ export function Dashboard({
 
       {!isLoading && workstreams.length === 0 ? (
         <div className="sidebar-state sidebar-empty">
-          <p>No workstreams yet. Create one to start ranking.</p>
+          <p>{archivedCount > 0 && !showArchived ? 'No active workstreams. Reveal archived below.' : 'No workstreams yet. Create one to start ranking.'}</p>
         </div>
       ) : null}
 
@@ -148,6 +149,14 @@ export function Dashboard({
           />
         ))}
       </div>
+
+      {archivedCount > 0 ? (
+        <div className="sidebar-subtle-row">
+          <button type="button" className={`sidebar-subtle-toggle ${showArchived ? 'active' : ''}`} onClick={onToggleShowArchived}>
+            {showArchived ? 'Hide archived' : `Show archived (${archivedCount})`}
+          </button>
+        </div>
+      ) : null}
     </aside>
   )
 }
