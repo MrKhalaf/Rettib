@@ -1,4 +1,11 @@
-import type { ChatStreamEvent, ContextDocInput, SendChatMessageInput } from '../../shared/types'
+import type {
+  ChatStreamEvent,
+  ChatSessionPreference,
+  ContextDocInput,
+  SendChatMessageInput,
+  StartTerminalSessionInput,
+  TerminalEvent
+} from '../../shared/types'
 
 import { getElectronApi } from './electron-api'
 
@@ -19,8 +26,22 @@ export const chatApi = {
     getElectronApi().chat.getSessionContext(workstreamId, conversationUuid),
   setSessionContext: (workstreamId: number, conversationUuid: string, docs: ContextDocInput[]) =>
     getElectronApi().chat.setSessionContext(workstreamId, conversationUuid, docs),
+  getSessionPreference: (conversationUuid: string) => getElectronApi().chat.getSessionPreference(conversationUuid),
+  setSessionPreference: (
+    conversationUuid: string,
+    patch: {
+      command_mode?: ChatSessionPreference['command_mode']
+      view_mode?: ChatSessionPreference['view_mode']
+    }
+  ) => getElectronApi().chat.setSessionPreference(conversationUuid, patch),
+  startTerminalSession: (input: StartTerminalSessionInput) => getElectronApi().chat.startTerminalSession(input),
+  stopTerminalSession: () => getElectronApi().chat.stopTerminalSession(),
+  sendTerminalInput: (data: string) => getElectronApi().chat.sendTerminalInput(data),
+  resizeTerminal: (cols: number, rows: number) => getElectronApi().chat.resizeTerminal(cols, rows),
+  getTerminalSessionState: () => getElectronApi().chat.getTerminalSessionState(),
   resolveContextDocs: (docs: ContextDocInput[]) => getElectronApi().chat.resolveContextDocs(docs),
   sendMessage: (input: SendChatMessageInput) => getElectronApi().chat.sendMessage(input),
   cancelStream: (streamId: string) => getElectronApi().chat.cancelStream(streamId),
-  onStreamEvent: (listener: (event: ChatStreamEvent) => void) => getElectronApi().chat.onStreamEvent(listener)
+  onStreamEvent: (listener: (event: ChatStreamEvent) => void) => getElectronApi().chat.onStreamEvent(listener),
+  onTerminalEvent: (listener: (event: TerminalEvent) => void) => getElectronApi().chat.onTerminalEvent(listener)
 }

@@ -6,6 +6,7 @@ import { app, BrowserWindow, nativeImage } from 'electron'
 
 import { initDatabase, listWorkstreams } from './database'
 import { registerIpcHandlers } from './ipc-handlers'
+import { stopTerminalSession } from './terminal-session-manager'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -175,6 +176,7 @@ async function bootstrap(): Promise<void> {
 void bootstrap()
 
 app.on('window-all-closed', () => {
+  stopTerminalSession()
   if (process.platform !== 'darwin') {
     app.quit()
   }

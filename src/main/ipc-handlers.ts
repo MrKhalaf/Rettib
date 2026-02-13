@@ -5,6 +5,8 @@ import path from 'node:path'
 import { dialog, ipcMain, shell } from 'electron'
 
 import type {
+  ChatSessionCommandMode,
+  ChatSessionViewMode,
   ContextDocInput,
   ContextDocSource,
   CreateWorkstreamInput,
@@ -31,6 +33,7 @@ import {
   createWorkstream,
   deleteTask,
   getDatabase,
+  getChatSessionPreference,
   getSessionContextFingerprint,
   getWorkstreamChatSession,
   getOrCreateClaudeSyncSource,
@@ -49,11 +52,20 @@ import {
   replaceWorkstreamContextDocuments,
   replaceSessionContextDocuments,
   setSessionContextFingerprint,
+  setChatSessionPreference,
   setWorkstreamChatSession,
   updateTask,
   updateWorkstream
 } from './database'
 import { calculateRankings, calculateRankingsWithChat } from './ranking-engine'
+import {
+  getTerminalSessionState,
+  isTerminalSessionActiveForConversation,
+  resizeTerminal,
+  sendTerminalInput,
+  startTerminalSession,
+  stopTerminalSession
+} from './terminal-session-manager'
 
 function ensureNumber(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -194,6 +206,8 @@ function parsePickContextFileOptions(value: unknown): { defaultPath: string | nu
 }
 
 const CLAUDE_PERMISSION_MODES = new Set(['acceptEdits', 'bypassPermissions', 'default', 'delegate', 'dontAsk', 'plan'])
+const CHAT_SESSION_COMMAND_MODES: ReadonlySet<ChatSessionCommandMode> = new Set(['claude', 'cc'])
+const CHAT_SESSION_VIEW_MODES: ReadonlySet<ChatSessionViewMode> = new Set(['chat', 'terminal'])
 const CONTEXT_DOC_SOURCES: ReadonlySet<ContextDocSource> = new Set(['obsidian', 'file'])
 
 function normalizeContextDocInput(entry: unknown, index: number): ContextDocInput {
@@ -335,6 +349,19 @@ function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
     payload.permission_mode === undefined || payload.permission_mode === null
       ? null
       : ensureString(payload.permission_mode, 'permission_mode').trim() || null
+  const dangerouslySkipPermissionsRaw = payload.dangerously_skip_permissions
+  if (
+    dangerouslySkipPermissionsRaw !== undefined &&
+    dangerouslySkipPermissionsRaw !== null &&
+    typeof dangerouslySkipPermissionsRaw !== 'boolean'
+  ) {
+    throw new Error('dangerously_skip_permissions must be a boolean')
+  }
+
+  const dangerouslySkipPermissions =
+    dangerouslySkipPermissionsRaw === undefined || dangerouslySkipPermissionsRaw === null
+      ? false
+      : dangerouslySkipPermissionsRaw
   const contextDocsProvided = Object.prototype.hasOwnProperty.call(payload, 'context_docs')
   const contextDocs = contextDocsProvided ? parseContextDocsInput(payload.context_docs) : undefined
 
@@ -354,7 +381,68 @@ function parseSendChatMessageInput(data: unknown): SendChatMessageInput {
     allow_workstream_session_fallback: allowWorkstreamSessionFallback,
     model,
     permission_mode: permissionModeRaw as SendChatMessageInput['permission_mode'],
+    dangerously_skip_permissions: dangerouslySkipPermissions,
     context_docs: contextDocs
+  }
+}
+
+function parseSessionPreferencePatch(data: unknown): {
+  command_mode?: ChatSessionCommandMode
+  view_mode?: ChatSessionViewMode
+} {
+  const payload = ensureObject(data, 'session preference patch')
+  const commandModeRaw =
+    payload.command_mode === undefined || payload.command_mode === null
+      ? undefined
+      : ensureString(payload.command_mode, 'command_mode').trim()
+  const viewModeRaw =
+    payload.view_mode === undefined || payload.view_mode === null
+      ? undefined
+      : ensureString(payload.view_mode, 'view_mode').trim()
+
+  if (commandModeRaw !== undefined && !CHAT_SESSION_COMMAND_MODES.has(commandModeRaw as ChatSessionCommandMode)) {
+    throw new Error('command_mode must be one of: claude, cc')
+  }
+
+  if (viewModeRaw !== undefined && !CHAT_SESSION_VIEW_MODES.has(viewModeRaw as ChatSessionViewMode)) {
+    throw new Error('view_mode must be one of: chat, terminal')
+  }
+
+  return {
+    command_mode: commandModeRaw as ChatSessionCommandMode | undefined,
+    view_mode: viewModeRaw as ChatSessionViewMode | undefined
+  }
+}
+
+function parseStartTerminalSessionInput(
+  data: unknown
+): {
+  workstream_id: number
+  conversation_uuid: string | null
+  cwd: string | null
+  command_mode: ChatSessionCommandMode | null
+} {
+  const payload = ensureObject(data, 'terminal session payload')
+  const workstreamId = ensureNumber(payload.workstream_id, 'workstream id')
+  const conversationUuid =
+    payload.conversation_uuid === undefined || payload.conversation_uuid === null
+      ? null
+      : ensureString(payload.conversation_uuid, 'conversation_uuid').trim() || null
+  const cwd = payload.cwd === undefined || payload.cwd === null ? null : ensureString(payload.cwd, 'cwd').trim() || null
+  const commandModeRaw =
+    payload.command_mode === undefined || payload.command_mode === null
+      ? null
+      : ensureString(payload.command_mode, 'command_mode').trim() || null
+
+  if (commandModeRaw && !CHAT_SESSION_COMMAND_MODES.has(commandModeRaw as ChatSessionCommandMode)) {
+    throw new Error('command_mode must be one of: claude, cc')
+  }
+
+  return {
+    workstream_id: workstreamId,
+    conversation_uuid: conversationUuid,
+    cwd,
+    command_mode: commandModeRaw as ChatSessionCommandMode | null
   }
 }
 
@@ -571,6 +659,88 @@ export function registerIpcHandlers(): void {
     return enrichSessionContextDocs(rows)
   })
 
+  ipcMain.handle('chat:get-session-preference', async (_event, conversationUuid: unknown) => {
+    const uuid = ensureString(conversationUuid, 'conversation uuid').trim()
+    if (!uuid) {
+      throw new Error('conversation uuid must not be empty')
+    }
+
+    return getChatSessionPreference(uuid, getDatabase())
+  })
+
+  ipcMain.handle('chat:set-session-preference', async (_event, conversationUuid: unknown, patch: unknown) => {
+    const uuid = ensureString(conversationUuid, 'conversation uuid').trim()
+    if (!uuid) {
+      throw new Error('conversation uuid must not be empty')
+    }
+
+    const parsedPatch = parseSessionPreferencePatch(patch)
+    if (parsedPatch.command_mode === undefined && parsedPatch.view_mode === undefined) {
+      throw new Error('session preference patch must include command_mode or view_mode')
+    }
+
+    return setChatSessionPreference(uuid, parsedPatch, getDatabase())
+  })
+
+  ipcMain.handle('chat:start-terminal-session', async (_event, data: unknown) => {
+    const payload = parseStartTerminalSessionInput(data)
+    const db = getDatabase()
+    const workstream = getWorkstream(db, payload.workstream_id)
+    if (!workstream) {
+      throw new Error(`Workstream ${payload.workstream_id} not found`)
+    }
+
+    const currentSession = getWorkstreamChatSession(payload.workstream_id, db)
+    const resolvedConversationUuid = payload.conversation_uuid ?? currentSession?.session_id ?? null
+    const persistedPreference = resolvedConversationUuid ? getChatSessionPreference(resolvedConversationUuid, db) : null
+    const commandMode = payload.command_mode ?? persistedPreference?.command_mode ?? 'claude'
+    const cwd = resolveChatCwd(
+      payload.cwd ?? null,
+      workstream.chat_run_directory,
+      currentSession?.project_cwd ?? null,
+      process.cwd(),
+      os.homedir()
+    )
+
+    const state = startTerminalSession({
+      workstreamId: payload.workstream_id,
+      conversationUuid: resolvedConversationUuid,
+      cwd,
+      commandMode
+    })
+
+    if (state.conversation_uuid) {
+      setChatSessionPreference(
+        state.conversation_uuid,
+        {
+          command_mode: commandMode
+        },
+        db
+      )
+    }
+
+    return state
+  })
+
+  ipcMain.handle('chat:stop-terminal-session', async () => {
+    return stopTerminalSession()
+  })
+
+  ipcMain.handle('chat:send-terminal-input', async (_event, data: unknown) => {
+    const value = ensureString(data, 'terminal input')
+    sendTerminalInput(value)
+  })
+
+  ipcMain.handle('chat:resize-terminal', async (_event, cols: unknown, rows: unknown) => {
+    const parsedCols = ensureNumber(cols, 'terminal cols')
+    const parsedRows = ensureNumber(rows, 'terminal rows')
+    resizeTerminal(parsedCols, parsedRows)
+  })
+
+  ipcMain.handle('chat:get-terminal-session-state', async () => {
+    return getTerminalSessionState()
+  })
+
   ipcMain.handle('chat:resolve-context-docs', async (_event, docs: unknown) => {
     const payloadDocs = parseContextDocsInput(docs)
     return resolveContextDocs(payloadDocs)
@@ -597,6 +767,10 @@ export function registerIpcHandlers(): void {
       payload.resume_session_id ??
       (payload.allow_workstream_session_fallback === false ? null : (currentSession?.session_id ?? null))
 
+    if (resumeSessionId && isTerminalSessionActiveForConversation(resumeSessionId)) {
+      throw new Error('Terminal session is active; use terminal input or stop terminal before sending chat messages.')
+    }
+
     const workstreamContextRows = listWorkstreamContextDocuments(payload.workstream_id, db)
     const workstreamContextDocs = toContextDocInputs(workstreamContextRows)
     const persistedContextRows = resumeSessionId ? listSessionContextDocuments(payload.workstream_id, resumeSessionId, db) : []
@@ -619,7 +793,8 @@ export function registerIpcHandlers(): void {
       cwd,
       resume_session_id: resumeSessionId,
       model: payload.model ?? null,
-      permission_mode: payload.permission_mode ?? null
+      permission_mode: payload.permission_mode ?? null,
+      dangerously_skip_permissions: payload.dangerously_skip_permissions ?? false
     })
 
     const sessionId = result.session_id ?? resumeSessionId

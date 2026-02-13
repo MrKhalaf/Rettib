@@ -33,6 +33,13 @@ const api: ElectronApi = {
       ipcRenderer.invoke('chat:get-session-context', workstreamId, conversationUuid),
     setSessionContext: (workstreamId, conversationUuid, docs) =>
       ipcRenderer.invoke('chat:set-session-context', workstreamId, conversationUuid, docs),
+    getSessionPreference: (conversationUuid) => ipcRenderer.invoke('chat:get-session-preference', conversationUuid),
+    setSessionPreference: (conversationUuid, patch) => ipcRenderer.invoke('chat:set-session-preference', conversationUuid, patch),
+    startTerminalSession: (input) => ipcRenderer.invoke('chat:start-terminal-session', input),
+    stopTerminalSession: () => ipcRenderer.invoke('chat:stop-terminal-session'),
+    sendTerminalInput: (data) => ipcRenderer.invoke('chat:send-terminal-input', data),
+    resizeTerminal: (cols, rows) => ipcRenderer.invoke('chat:resize-terminal', cols, rows),
+    getTerminalSessionState: () => ipcRenderer.invoke('chat:get-terminal-session-state'),
     resolveContextDocs: (docs) => ipcRenderer.invoke('chat:resolve-context-docs', docs),
     sendMessage: (input) => ipcRenderer.invoke('chat:send-message', input),
     cancelStream: (streamId) => ipcRenderer.invoke('chat:cancel-stream', streamId),
@@ -43,6 +50,15 @@ const api: ElectronApi = {
       ipcRenderer.on('chat:stream-event', handler)
       return () => {
         ipcRenderer.removeListener('chat:stream-event', handler)
+      }
+    },
+    onTerminalEvent: (listener) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        listener(payload as Parameters<typeof listener>[0])
+      }
+      ipcRenderer.on('chat:terminal-event', handler)
+      return () => {
+        ipcRenderer.removeListener('chat:terminal-event', handler)
       }
     }
   },
