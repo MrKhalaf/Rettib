@@ -3,6 +3,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 
 import type {
+  ChatSessionPreference,
   ChatReference,
   ContextDocInput,
   CreateTaskInput,
@@ -21,7 +22,7 @@ import type {
 } from '../shared/types'
 import { normalizeContextReference } from './context-service'
 
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 let dbInstance: Database.Database | null = null
 
@@ -87,6 +88,20 @@ function ensureWorkstreamContextSchema(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_workstream_context_docs_ws
     ON workstream_context_documents(workstream_id);
+  `)
+}
+
+function ensureChatSessionPreferenceSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_session_preferences (
+      conversation_uuid TEXT PRIMARY KEY,
+      command_mode TEXT NOT NULL DEFAULT 'claude' CHECK (command_mode IN ('claude', 'cc')),
+      view_mode TEXT NOT NULL DEFAULT 'chat' CHECK (view_mode IN ('chat', 'terminal')),
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_session_preferences_updated
+    ON chat_session_preferences(updated_at DESC);
   `)
 }
 
@@ -269,6 +284,7 @@ function runMigrations(db: Database.Database): void {
     ensureWorkstreamRunDirectoryColumn(db)
     ensureContextSchema(db)
     ensureWorkstreamContextSchema(db)
+    ensureChatSessionPreferenceSchema(db)
     backfillChatRunDirectoryFromLegacyNotes(db)
     normalizeClaudeSyncSourceType(db)
     normalizeClaudeSyncSourcePath(db)
@@ -376,6 +392,13 @@ function runMigrations(db: Database.Database): void {
         details TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS chat_session_preferences (
+        conversation_uuid TEXT PRIMARY KEY,
+        command_mode TEXT NOT NULL DEFAULT 'claude' CHECK (command_mode IN ('claude', 'cc')),
+        view_mode TEXT NOT NULL DEFAULT 'chat' CHECK (view_mode IN ('chat', 'terminal')),
+        updated_at INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_workstreams_status ON workstreams(status);
       CREATE INDEX IF NOT EXISTS idx_workstreams_progress ON workstreams(last_progress_at);
       CREATE INDEX IF NOT EXISTS idx_progress_updates_workstream ON progress_updates(workstream_id, created_at DESC);
@@ -386,6 +409,7 @@ function runMigrations(db: Database.Database): void {
       CREATE INDEX IF NOT EXISTS idx_chat_context_state_ws ON chat_context_state(workstream_id);
       CREATE INDEX IF NOT EXISTS idx_workstream_context_docs_ws ON workstream_context_documents(workstream_id);
       CREATE INDEX IF NOT EXISTS idx_sync_runs_source ON sync_runs(source_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_preferences_updated ON chat_session_preferences(updated_at DESC);
 
       CREATE TRIGGER IF NOT EXISTS trg_progress_insert_update_workstream
       AFTER INSERT ON progress_updates
@@ -470,6 +494,10 @@ function runMigrations(db: Database.Database): void {
 
   if (version < 5) {
     ensureWorkstreamContextSchema(db)
+  }
+
+  if (version < 6) {
+    ensureChatSessionPreferenceSchema(db)
   }
 
   db.pragma(`user_version = ${SCHEMA_VERSION}`)
@@ -1100,6 +1128,63 @@ export function setWorkstreamChatSession(
   ).run(workstreamId, sessionId, projectCwd, updatedAt)
 
   return getWorkstreamChatSession(workstreamId, db) as WorkstreamChatSession
+}
+
+export function getChatSessionPreference(conversationUuid: string, db = getDatabase()): ChatSessionPreference | null {
+  const normalizedConversationUuid = conversationUuid.trim()
+  if (!normalizedConversationUuid) {
+    return null
+  }
+
+  const row = db
+    .prepare(
+      `
+      SELECT conversation_uuid, command_mode, view_mode, updated_at
+      FROM chat_session_preferences
+      WHERE conversation_uuid = ?
+      LIMIT 1
+      `
+    )
+    .get(normalizedConversationUuid) as ChatSessionPreference | undefined
+
+  return row ?? null
+}
+
+export function setChatSessionPreference(
+  conversationUuid: string,
+  patch: {
+    command_mode?: 'claude' | 'cc'
+    view_mode?: 'chat' | 'terminal'
+  },
+  db = getDatabase()
+): ChatSessionPreference {
+  const normalizedConversationUuid = conversationUuid.trim()
+  if (!normalizedConversationUuid) {
+    throw new Error('conversation uuid must not be empty')
+  }
+
+  const existing = getChatSessionPreference(normalizedConversationUuid, db)
+  const commandMode = patch.command_mode ?? existing?.command_mode ?? 'claude'
+  const viewMode = patch.view_mode ?? existing?.view_mode ?? 'chat'
+
+  db.prepare(
+    `
+    INSERT INTO chat_session_preferences (
+      conversation_uuid,
+      command_mode,
+      view_mode,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(conversation_uuid)
+    DO UPDATE SET
+      command_mode = excluded.command_mode,
+      view_mode = excluded.view_mode,
+      updated_at = excluded.updated_at
+    `
+  ).run(normalizedConversationUuid, commandMode, viewMode, nowMs())
+
+  return getChatSessionPreference(normalizedConversationUuid, db) as ChatSessionPreference
 }
 
 interface StoredContextDocRow {
