@@ -1,5 +1,8 @@
 export type {
   ChatReference,
+  ChatSessionCommandMode,
+  ChatSessionPreference,
+  ChatSessionViewMode,
   ClaudeConversation,
   CreateTaskInput,
   CreateWorkstreamInput,
@@ -9,6 +12,8 @@ export type {
   SyncSource,
   Task,
   TaskStatus,
+  TerminalEvent,
+  TerminalSessionState,
   UpdateTaskInput,
   UpdateWorkstreamInput,
   Workstream,

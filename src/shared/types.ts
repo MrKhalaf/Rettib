@@ -145,6 +145,7 @@ export interface SendChatMessageInput {
   allow_workstream_session_fallback?: boolean
   model?: string | null
   permission_mode?: ClaudePermissionMode | null
+  dangerously_skip_permissions?: boolean
   context_docs?: ContextDocInput[]
 }
 
@@ -158,6 +159,45 @@ export interface SendChatMessageResult {
 }
 
 export type ClaudePermissionMode = 'acceptEdits' | 'bypassPermissions' | 'default' | 'delegate' | 'dontAsk' | 'plan'
+export type ChatSessionCommandMode = 'claude' | 'cc'
+export type ChatSessionViewMode = 'chat' | 'terminal'
+
+export interface ChatSessionPreference {
+  conversation_uuid: string
+  command_mode: ChatSessionCommandMode
+  view_mode: ChatSessionViewMode
+  updated_at: number
+}
+
+export interface StartTerminalSessionInput {
+  workstream_id: number
+  conversation_uuid?: string | null
+  cwd?: string | null
+  command_mode?: ChatSessionCommandMode | null
+}
+
+export interface TerminalSessionState {
+  is_active: boolean
+  conversation_uuid: string | null
+  workstream_id: number | null
+  cwd: string | null
+  command_mode: ChatSessionCommandMode | null
+  started_at: number | null
+}
+
+export type TerminalEventType = 'started' | 'output' | 'exit' | 'stopped' | 'error'
+
+export interface TerminalEvent {
+  type: TerminalEventType
+  timestamp: number
+  conversation_uuid: string | null
+  workstream_id: number | null
+  output?: string
+  exit_code?: number | null
+  signal?: number | null
+  message?: string
+  state?: TerminalSessionState
+}
 
 export type ChatStreamEventType =
   | 'init'
@@ -260,9 +300,23 @@ export interface ElectronApi {
     getSessionContext: (workstreamId: number, conversationUuid: string) => Promise<SessionContextDoc[]>
     setSessionContext: (workstreamId: number, conversationUuid: string, docs: ContextDocInput[]) => Promise<SessionContextDoc[]>
     resolveContextDocs: (docs: ContextDocInput[]) => Promise<ResolveContextDocResult[]>
+    getSessionPreference: (conversationUuid: string) => Promise<ChatSessionPreference | null>
+    setSessionPreference: (
+      conversationUuid: string,
+      patch: {
+        command_mode?: ChatSessionCommandMode
+        view_mode?: ChatSessionViewMode
+      }
+    ) => Promise<ChatSessionPreference>
+    startTerminalSession: (input: StartTerminalSessionInput) => Promise<TerminalSessionState>
+    stopTerminalSession: () => Promise<TerminalSessionState>
+    sendTerminalInput: (data: string) => Promise<void>
+    resizeTerminal: (cols: number, rows: number) => Promise<void>
+    getTerminalSessionState: () => Promise<TerminalSessionState>
     sendMessage: (input: SendChatMessageInput) => Promise<SendChatMessageResult>
     cancelStream: (streamId: string) => Promise<void>
     onStreamEvent: (listener: (event: ChatStreamEvent) => void) => () => void
+    onTerminalEvent: (listener: (event: TerminalEvent) => void) => () => void
   }
   sync: {
     run: (sourceId: number) => Promise<void>
