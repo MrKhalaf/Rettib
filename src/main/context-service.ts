@@ -61,26 +61,49 @@ function getObsidianRoot(): string {
   return path.join(os.homedir(), 'Library', 'Mobile Documents', 'iCloud~md~obsidian', 'Documents')
 }
 
+function safePathExists(candidatePath: string): boolean {
+  try {
+    return fs.existsSync(candidatePath)
+  } catch {
+    return false
+  }
+}
+
+function safeIsFile(candidatePath: string): boolean {
+  try {
+    return fs.statSync(candidatePath).isFile()
+  } catch {
+    return false
+  }
+}
+
+function safeReadDirectoryEntries(directoryPath: string): fs.Dirent[] {
+  try {
+    return fs.readdirSync(directoryPath, { withFileTypes: true })
+  } catch {
+    return []
+  }
+}
+
 function findObsidianFileByRelativePath(relativePath: string): string | null {
   const obsidianRoot = getObsidianRoot()
-  if (!fs.existsSync(obsidianRoot)) {
+  if (!safePathExists(obsidianRoot)) {
     return null
   }
 
   const notePath = relativePath.endsWith('.md') ? relativePath : `${relativePath}.md`
   const directCandidate = path.join(obsidianRoot, notePath)
-  if (fs.existsSync(directCandidate) && fs.statSync(directCandidate).isFile()) {
+  if (safePathExists(directCandidate) && safeIsFile(directCandidate)) {
     return directCandidate
   }
 
-  const vaultDirs = fs
-    .readdirSync(obsidianRoot, { withFileTypes: true })
+  const vaultDirs = safeReadDirectoryEntries(obsidianRoot)
     .filter((entry) => entry.isDirectory())
     .map((entry) => path.join(obsidianRoot, entry.name))
 
   for (const vaultDir of vaultDirs) {
     const candidate = path.join(vaultDir, notePath)
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+    if (safePathExists(candidate) && safeIsFile(candidate)) {
       return candidate
     }
   }
@@ -117,7 +140,7 @@ export function resolveObsidianReference(reference: string): string | null {
   const absoluteCandidate = expandHomePath(target)
   if (path.isAbsolute(absoluteCandidate)) {
     const fullPath = absoluteCandidate.endsWith('.md') ? absoluteCandidate : `${absoluteCandidate}.md`
-    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+    if (safePathExists(fullPath) && safeIsFile(fullPath)) {
       return fullPath
     }
   }
