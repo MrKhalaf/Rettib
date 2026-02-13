@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
 import type {
+  ChatSessionCommandMode,
+  ChatSessionPreference,
+  ChatSessionViewMode,
   ChatReference,
   ChatStreamEvent,
   ClaudeConversationPreviewMessage,
@@ -9,6 +12,8 @@ import type {
   ContextDocSource,
   ResolveContextDocResult,
   SessionContextDoc,
+  TerminalEvent,
+  TerminalSessionState,
   UpdateWorkstreamInput,
   WorkstreamContextDoc,
   WorkstreamStatus
@@ -26,6 +31,7 @@ import { useRunSync, useSyncDiagnostics, useSyncSource } from '../hooks/useSync'
 import { useUpdateWorkstream, useWorkstreamDetail } from '../hooks/useWorkstreams'
 import { formatDateTime, formatRelativeTime } from '../utils/time'
 import { ChatMessageContent } from './chat/ChatMessageContent'
+import { TerminalPane } from './chat/TerminalPane'
 
 interface Props {
   workstreamId: number | null
@@ -37,6 +43,16 @@ type ToolUseKind = 'read' | 'edit' | 'bash' | 'grep' | 'question' | 'permission'
 const SUGGESTION_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
 const WORKFLOW_STATUS_OPTIONS: WorkstreamStatus[] = ['active', 'blocked', 'waiting', 'done']
 const RUN_DIRECTORY_PREFERRED_ROOTS = ['~/Projects', '~/Projects/playground-projects']
+const DEFAULT_CHAT_SESSION_COMMAND_MODE: ChatSessionCommandMode = 'claude'
+const DEFAULT_CHAT_SESSION_VIEW_MODE: ChatSessionViewMode = 'chat'
+const DEFAULT_TERMINAL_SESSION_STATE: TerminalSessionState = {
+  is_active: false,
+  conversation_uuid: null,
+  workstream_id: null,
+  cwd: null,
+  command_mode: null,
+  started_at: null
+}
 
 interface ToolUseEntry {
   id: string
@@ -576,6 +592,13 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const [chatSendErrorsByTab, setChatSendErrorsByTab] = useState<Record<string, string | null>>({})
   const [pendingQuestionsByTab, setPendingQuestionsByTab] = useState<Record<string, QuestionSummary | null>>({})
   const [pendingPermissionsByTab, setPendingPermissionsByTab] = useState<Record<string, PermissionSummary | null>>({})
+  const [sessionPreferencesByConversation, setSessionPreferencesByConversation] = useState<Record<string, ChatSessionPreference>>({})
+  const [sessionPreferenceLoadedByConversation, setSessionPreferenceLoadedByConversation] = useState<Record<string, boolean>>({})
+  const [draftCommandModeByTab, setDraftCommandModeByTab] = useState<Record<string, ChatSessionCommandMode>>({})
+  const [draftViewModeByTab, setDraftViewModeByTab] = useState<Record<string, ChatSessionViewMode>>({})
+  const [terminalState, setTerminalState] = useState<TerminalSessionState>(DEFAULT_TERMINAL_SESSION_STATE)
+  const [terminalOutputByConversation, setTerminalOutputByConversation] = useState<Record<string, string>>({})
+  const [terminalErrorsByTab, setTerminalErrorsByTab] = useState<Record<string, string | null>>({})
 
   const [chatTabs, setChatTabs] = useState<ChatTopicTab[]>([])
   const [activeChatTabId, setActiveChatTabId] = useState<string | null>(null)
@@ -591,6 +614,10 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const activeChatTabIdRef = useRef<string | null>(null)
   const activeMessageTabIdRef = useRef<string | null>(null)
   const streamTabLookupRef = useRef<Record<string, string>>({})
+  const pendingTerminalStartTabIdRef = useRef<string | null>(null)
+  const contextDocsByTabRef = useRef<Record<string, ContextDocInput[]>>({})
+  const projectContextDocsRef = useRef<ContextDocInput[]>([])
+  const workstreamIdRef = useRef<number | null>(workstreamId)
   const isSendingChatRef = useRef(false)
 
   const chatFeedRef = useRef<HTMLDivElement | null>(null)
@@ -664,6 +691,22 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     return chatMessagesByTab[activeChatTabId] ?? []
   }, [chatMessagesByTab, activeChatTabId])
   const activeChatConversationId = activeChatTab?.conversationUuid ?? activeChatTab?.resumeSessionId ?? null
+  const activeSessionPreference = activeChatConversationId ? (sessionPreferencesByConversation[activeChatConversationId] ?? null) : null
+  const activeCommandMode =
+    activeSessionPreference?.command_mode ??
+    (activeChatTabId ? (draftCommandModeByTab[activeChatTabId] ?? DEFAULT_CHAT_SESSION_COMMAND_MODE) : DEFAULT_CHAT_SESSION_COMMAND_MODE)
+  const activeViewMode =
+    activeSessionPreference?.view_mode ??
+    (activeChatTabId ? (draftViewModeByTab[activeChatTabId] ?? DEFAULT_CHAT_SESSION_VIEW_MODE) : DEFAULT_CHAT_SESSION_VIEW_MODE)
+  const isTerminalActiveForActiveConversation = Boolean(
+    terminalState.is_active &&
+      activeChatConversationId &&
+      terminalState.conversation_uuid &&
+      terminalState.conversation_uuid === activeChatConversationId
+  )
+  const terminalConversationId = terminalState.conversation_uuid
+  const activeTerminalOutput = activeChatConversationId ? (terminalOutputByConversation[activeChatConversationId] ?? '') : ''
+  const activeTerminalError = activeChatTabId ? (terminalErrorsByTab[activeChatTabId] ?? null) : null
   const activeConversationPreview = activeChatConversationId ? conversationPreviews[activeChatConversationId] : undefined
   const isActiveChatHistoryLoading = activeChatMessages.length === 0 && activeConversationPreview?.status === 'loading'
   const activeChatHistoryError = activeChatMessages.length === 0 && activeConversationPreview?.status === 'error' ? activeConversationPreview.error : null
@@ -712,6 +755,30 @@ export function WorkstreamDetail({ workstreamId }: Props) {
 
   function setChatErrorForTab(tabId: string, error: string | null) {
     setChatSendErrorsByTab((previous) => {
+      const current = previous[tabId] ?? null
+      if (current === error) {
+        return previous
+      }
+
+      if (error === null) {
+        if (!(tabId in previous)) {
+          return previous
+        }
+
+        const next = { ...previous }
+        delete next[tabId]
+        return next
+      }
+
+      return {
+        ...previous,
+        [tabId]: error
+      }
+    })
+  }
+
+  function setTerminalErrorForTab(tabId: string, error: string | null) {
+    setTerminalErrorsByTab((previous) => {
       const current = previous[tabId] ?? null
       if (current === error) {
         return previous
@@ -912,6 +979,18 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   }, [isSendingChat])
 
   useEffect(() => {
+    contextDocsByTabRef.current = contextDocsByTab
+  }, [contextDocsByTab])
+
+  useEffect(() => {
+    projectContextDocsRef.current = projectContextDocs
+  }, [projectContextDocs])
+
+  useEffect(() => {
+    workstreamIdRef.current = workstreamId
+  }, [workstreamId])
+
+  useEffect(() => {
     if (!detail) {
       return
     }
@@ -952,6 +1031,13 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     setChatSendErrorsByTab({})
     setPendingQuestionsByTab({})
     setPendingPermissionsByTab({})
+    setSessionPreferencesByConversation({})
+    setSessionPreferenceLoadedByConversation({})
+    setDraftCommandModeByTab({})
+    setDraftViewModeByTab({})
+    setTerminalState(DEFAULT_TERMINAL_SESSION_STATE)
+    setTerminalOutputByConversation({})
+    setTerminalErrorsByTab({})
     setIsSendingChat(false)
     setActiveStreamId(null)
     setChatTabs([])
@@ -968,6 +1054,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     activeChatTabIdRef.current = null
     activeMessageTabIdRef.current = null
     streamTabLookupRef.current = {}
+    pendingTerminalStartTabIdRef.current = null
     isSendingChatRef.current = false
   }, [workstreamId])
 
@@ -981,6 +1068,27 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     setChatSessionId(chatSessionQuery.data.session_id)
     setChatProjectCwd(chatSessionQuery.data.project_cwd)
   }, [chatSessionQuery.data])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void chatApi
+      .getTerminalSessionState()
+      .then((state) => {
+        if (!cancelled) {
+          setTerminalState(state)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTerminalState(DEFAULT_TERMINAL_SESSION_STATE)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [workstreamId])
 
   useEffect(() => {
     if (workstreamId === null) {
@@ -1112,6 +1220,21 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     })
 
     setPendingPermissionsByTab((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
+
+    setTerminalErrorsByTab((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
+
+    setDraftCommandModeByTab((previous) => {
+      const next = pruneRecordByTab(previous)
+      return hasSameKeys(previous, next) ? previous : next
+    })
+
+    setDraftViewModeByTab((previous) => {
       const next = pruneRecordByTab(previous)
       return hasSameKeys(previous, next) ? previous : next
     })
@@ -1293,6 +1416,125 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     projectContextLoaded,
     workstreamId
   ])
+
+  useEffect(() => {
+    if (!activeChatConversationId) {
+      return
+    }
+
+    if (sessionPreferenceLoadedByConversation[activeChatConversationId]) {
+      return
+    }
+
+    let cancelled = false
+
+    void chatApi
+      .getSessionPreference(activeChatConversationId)
+      .then((preference) => {
+        if (cancelled) {
+          return
+        }
+
+        if (preference) {
+          setSessionPreferencesByConversation((previous) => ({
+            ...previous,
+            [preference.conversation_uuid]: preference
+          }))
+        }
+
+        setSessionPreferenceLoadedByConversation((previous) => ({
+          ...previous,
+          [activeChatConversationId]: true
+        }))
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return
+        }
+
+        const message = error instanceof Error ? error.message : 'Failed to load session preference'
+        if (activeChatTabIdRef.current) {
+          setTerminalErrorForTab(activeChatTabIdRef.current, message)
+        }
+
+        setSessionPreferenceLoadedByConversation((previous) => ({
+          ...previous,
+          [activeChatConversationId]: true
+        }))
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeChatConversationId, sessionPreferenceLoadedByConversation])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void chatApi
+      .getTerminalSessionState()
+      .then((state) => {
+        if (!cancelled) {
+          setTerminalState(state)
+          if (state.conversation_uuid) {
+            setChatSessionId(state.conversation_uuid)
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTerminalState(DEFAULT_TERMINAL_SESSION_STATE)
+        }
+      })
+
+    const unsubscribe = chatApi.onTerminalEvent((event: TerminalEvent) => {
+      if (event.type === 'output' && event.conversation_uuid && event.output) {
+        setTerminalOutputByConversation((previous) => ({
+          ...previous,
+          [event.conversation_uuid as string]: `${previous[event.conversation_uuid as string] ?? ''}${event.output}`
+        }))
+      }
+
+      if ((event.type === 'started' || event.type === 'stopped' || event.type === 'exit') && event.state) {
+        setTerminalState(event.state)
+      }
+
+      if (event.type === 'started' && event.conversation_uuid) {
+        setChatSessionId(event.conversation_uuid)
+        promoteActiveTabWithSession(event.conversation_uuid)
+
+        const pendingTabId = pendingTerminalStartTabIdRef.current ?? activeChatTabIdRef.current
+        if (pendingTabId) {
+          const currentWorkstreamId = workstreamIdRef.current
+          if (currentWorkstreamId !== null) {
+            const docs = contextDocsByTabRef.current[pendingTabId] ?? projectContextDocsRef.current
+            void persistContextForSession(currentWorkstreamId, event.conversation_uuid, docs)
+          }
+        }
+
+        pendingTerminalStartTabIdRef.current = null
+      }
+
+      if (event.type === 'error' && event.message) {
+        const targetTabId = pendingTerminalStartTabIdRef.current ?? activeChatTabIdRef.current
+        if (targetTabId) {
+          setTerminalErrorForTab(targetTabId, event.message)
+        }
+      }
+
+      if (event.type === 'stopped' || event.type === 'exit') {
+        pendingTerminalStartTabIdRef.current = null
+        void detailQuery.refetch()
+        void conversationsQuery.refetch()
+        void chatSessionQuery.refetch()
+      }
+    })
+
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [])
 
   useEffect(() => {
     const unsubscribe = chatApi.onStreamEvent((streamEvent) => {
@@ -1843,6 +2085,36 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       return next
     })
 
+    setTerminalErrorsByTab((previous) => {
+      if (!(tabId in previous)) {
+        return previous
+      }
+
+      const next = { ...previous }
+      delete next[tabId]
+      return next
+    })
+
+    setDraftCommandModeByTab((previous) => {
+      if (!(tabId in previous)) {
+        return previous
+      }
+
+      const next = { ...previous }
+      delete next[tabId]
+      return next
+    })
+
+    setDraftViewModeByTab((previous) => {
+      if (!(tabId in previous)) {
+        return previous
+      }
+
+      const next = { ...previous }
+      delete next[tabId]
+      return next
+    })
+
     if (activeMessageTabIdRef.current === tabId) {
       activeMessageTabIdRef.current = null
     }
@@ -1857,6 +2129,15 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       const closingTab = tabs.find((tab) => tab.id === tabId)
       if (!closingTab) {
         return tabs
+      }
+
+      if (
+        terminalState.is_active &&
+        closingTab.resumeSessionId &&
+        terminalState.conversation_uuid &&
+        closingTab.resumeSessionId === terminalState.conversation_uuid
+      ) {
+        void handleStopTerminalSession()
       }
 
       if (closingTab.kind === 'linked' && closingTab.conversationUuid) {
@@ -1888,6 +2169,66 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       const message = error instanceof Error ? error.message : 'Failed to persist session context'
       setContextUiError(message)
     }
+  }
+
+  async function persistSessionPreference(
+    conversationUuid: string,
+    patch: {
+      command_mode?: ChatSessionCommandMode
+      view_mode?: ChatSessionViewMode
+    }
+  ) {
+    try {
+      const saved = await chatApi.setSessionPreference(conversationUuid, patch)
+      setSessionPreferencesByConversation((previous) => ({
+        ...previous,
+        [saved.conversation_uuid]: saved
+      }))
+      setSessionPreferenceLoadedByConversation((previous) => ({
+        ...previous,
+        [saved.conversation_uuid]: true
+      }))
+      return saved
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save session preference'
+      if (activeChatTabIdRef.current) {
+        setTerminalErrorForTab(activeChatTabIdRef.current, message)
+      }
+      return null
+    }
+  }
+
+  async function persistDraftPreferencesForTab(tabId: string, conversationUuid: string) {
+    const commandModeDraft = draftCommandModeByTab[tabId]
+    const viewModeDraft = draftViewModeByTab[tabId]
+    if (commandModeDraft === undefined && viewModeDraft === undefined) {
+      return
+    }
+
+    await persistSessionPreference(conversationUuid, {
+      command_mode: commandModeDraft,
+      view_mode: viewModeDraft
+    })
+
+    setDraftCommandModeByTab((previous) => {
+      if (!(tabId in previous)) {
+        return previous
+      }
+
+      const next = { ...previous }
+      delete next[tabId]
+      return next
+    })
+
+    setDraftViewModeByTab((previous) => {
+      if (!(tabId in previous)) {
+        return previous
+      }
+
+      const next = { ...previous }
+      delete next[tabId]
+      return next
+    })
   }
 
   async function persistProjectContext(workstream: number, docs: ContextDocInput[]) {
@@ -2052,8 +2393,150 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     }
   }
 
+  async function handleCommandModeChange(nextMode: ChatSessionCommandMode) {
+    if (!activeChatTabId) {
+      return
+    }
+
+    setTerminalErrorForTab(activeChatTabId, null)
+
+    if (!activeChatConversationId) {
+      setDraftCommandModeByTab((previous) => ({
+        ...previous,
+        [activeChatTabId]: nextMode
+      }))
+      return
+    }
+
+    await persistSessionPreference(activeChatConversationId, { command_mode: nextMode })
+    if (isTerminalActiveForActiveConversation) {
+      appendSystemMessage(activeChatTabId, 'Command mode changed. The new mode applies the next time you start terminal.')
+    }
+  }
+
+  async function handleViewModeChange(nextMode: ChatSessionViewMode) {
+    if (!activeChatTabId) {
+      return
+    }
+
+    setTerminalErrorForTab(activeChatTabId, null)
+
+    if (!activeChatConversationId) {
+      setDraftViewModeByTab((previous) => ({
+        ...previous,
+        [activeChatTabId]: nextMode
+      }))
+      return
+    }
+
+    await persistSessionPreference(activeChatConversationId, { view_mode: nextMode })
+  }
+
+  async function startTerminalForActiveTopic(allowReplaceActive: boolean): Promise<boolean> {
+    if (workstreamId === null || !activeChatTabId) {
+      return false
+    }
+
+    const activeTab = chatTabs.find((tab) => tab.id === activeChatTabId)
+    if (!activeTab) {
+      return false
+    }
+
+    const payload = {
+      workstream_id: workstreamId,
+      conversation_uuid: activeTab.resumeSessionId,
+      cwd: chatProjectCwd ?? detail?.workstream.chat_run_directory ?? null,
+      command_mode: activeCommandMode
+    }
+
+    try {
+      pendingTerminalStartTabIdRef.current = activeChatTabId
+      const state = await chatApi.startTerminalSession(payload)
+      setTerminalState(state)
+
+      if (state.conversation_uuid) {
+        setChatSessionId(state.conversation_uuid)
+        promoteActiveTabWithSession(state.conversation_uuid)
+        await persistDraftPreferencesForTab(activeChatTabId, state.conversation_uuid)
+        await persistContextForSession(workstreamId, state.conversation_uuid, activeContextDocs)
+      }
+
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to start terminal session'
+      if (
+        !allowReplaceActive &&
+        message.toLowerCase().includes('another terminal session is already active') &&
+        window.confirm('Another terminal session is active. Stop it and start this one?')
+      ) {
+        try {
+          await chatApi.stopTerminalSession()
+        } catch (stopError) {
+          const stopMessage = stopError instanceof Error ? stopError.message : 'Failed to stop currently active terminal session'
+          setTerminalErrorForTab(activeChatTabId, stopMessage)
+          pendingTerminalStartTabIdRef.current = null
+          return false
+        }
+        return await startTerminalForActiveTopic(true)
+      }
+
+      setTerminalErrorForTab(activeChatTabId, message)
+      pendingTerminalStartTabIdRef.current = null
+      return false
+    }
+  }
+
+  async function handleStartTerminalSession() {
+    await startTerminalForActiveTopic(false)
+  }
+
+  async function handleStopTerminalSession() {
+    try {
+      const state = await chatApi.stopTerminalSession()
+      setTerminalState(state)
+      if (activeChatTabId) {
+        setTerminalErrorForTab(activeChatTabId, null)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to stop terminal session'
+      if (activeChatTabId) {
+        setTerminalErrorForTab(activeChatTabId, message)
+      }
+    }
+  }
+
+  function handleTerminalInput(data: string) {
+    if (!isTerminalActiveForActiveConversation) {
+      return
+    }
+
+    void chatApi.sendTerminalInput(data).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Failed to send terminal input'
+      if (activeChatTabId) {
+        setTerminalErrorForTab(activeChatTabId, message)
+      }
+    })
+  }
+
+  function handleTerminalResize(cols: number, rows: number) {
+    if (!isTerminalActiveForActiveConversation) {
+      return
+    }
+
+    void chatApi.resizeTerminal(cols, rows).catch(() => {
+      // Ignore resize failures from transient layout updates.
+    })
+  }
+
   async function handleSendChatMessage(overrides?: { message?: string; permissionMode?: ClaudePermissionMode | null }) {
     if (workstreamId === null || isSendingChat) {
+      return
+    }
+
+    if (isTerminalActiveForActiveConversation) {
+      if (activeChatTabIdRef.current) {
+        setChatErrorForTab(activeChatTabIdRef.current, 'Terminal session is active; use terminal input or stop terminal first.')
+      }
       return
     }
 
@@ -2108,6 +2591,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
         resume_session_id: activeTabSessionId,
         allow_workstream_session_fallback: allowWorkstreamSessionFallback,
         permission_mode: overrides?.permissionMode ?? null,
+        dangerously_skip_permissions: activeCommandMode === 'cc',
         context_docs: activeTabContextDocs
       }
 
@@ -2118,6 +2602,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       if (result.session_id) {
         setChatSessionId(result.session_id)
         promoteActiveTabWithSession(result.session_id)
+        await persistDraftPreferencesForTab(targetTabId, result.session_id)
         await persistContextForSession(workstreamId, result.session_id, activeTabContextDocs)
       }
 
@@ -2578,259 +3063,333 @@ export function WorkstreamDetail({ workstreamId }: Props) {
               +
             </button>
             <div className="session-id">session: {visibleSessionId ?? 'new session'}</div>
+            <div className="session-controls">
+              <div className="session-control-group">
+                <span>Mode</span>
+                <button
+                  type="button"
+                  className={`session-control-btn ${activeCommandMode === 'claude' ? 'active' : ''}`}
+                  onClick={() => void handleCommandModeChange('claude')}
+                >
+                  Claude
+                </button>
+                <button
+                  type="button"
+                  className={`session-control-btn ${activeCommandMode === 'cc' ? 'active' : ''}`}
+                  onClick={() => void handleCommandModeChange('cc')}
+                >
+                  CC
+                </button>
+              </div>
+              <div className="session-control-group">
+                <span>View</span>
+                <button
+                  type="button"
+                  className={`session-control-btn ${activeViewMode === 'chat' ? 'active' : ''}`}
+                  onClick={() => void handleViewModeChange('chat')}
+                >
+                  Chat
+                </button>
+                <button
+                  type="button"
+                  className={`session-control-btn ${activeViewMode === 'terminal' ? 'active' : ''}`}
+                  onClick={() => void handleViewModeChange('terminal')}
+                >
+                  Terminal
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="messages-scroll" ref={chatFeedRef}>
-            <div className="messages-container">
-              {activeChatMessages.length === 0 ? (
-                <div className="empty-state">
-                  <div className="empty-title">Start the thread</div>
-                  <div className="empty-subtitle">
-                    {isActiveChatHistoryLoading
-                      ? 'Loading last messages for this topic...'
-                      : activeChatHistoryError
-                        ? activeChatHistoryError
-                        : 'Send a message to stream output from Claude Code CLI.'}
-                  </div>
-                </div>
-              ) : (
-                activeChatMessages.map((chatMessage) => {
-                  if (chatMessage.role === 'user') {
-                    return (
-                      <div key={chatMessage.id} className="message-group message-user">
-                        <div className="message-bubble">
-                          <p>{chatMessage.text}</p>
-                        </div>
+          {activeViewMode === 'terminal' ? (
+            <div className="terminal-view">
+              <TerminalPane
+                conversationUuid={activeChatConversationId}
+                activeConversationUuid={terminalConversationId}
+                output={activeTerminalOutput}
+                isTerminalRunning={terminalState.is_active}
+                terminalError={activeTerminalError}
+                onStart={() => {
+                  void handleStartTerminalSession()
+                }}
+                onStop={() => {
+                  void handleStopTerminalSession()
+                }}
+                onSendInput={handleTerminalInput}
+                onResize={handleTerminalResize}
+              />
+              {terminalState.is_active && terminalConversationId && terminalConversationId !== activeChatConversationId && (
+                <p className="terminal-note">Another topic owns the active terminal: {terminalConversationId}</p>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="messages-scroll" ref={chatFeedRef}>
+                <div className="messages-container">
+                  {activeChatMessages.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-title">Start the thread</div>
+                      <div className="empty-subtitle">
+                        {isActiveChatHistoryLoading
+                          ? 'Loading last messages for this topic...'
+                          : activeChatHistoryError
+                            ? activeChatHistoryError
+                            : 'Send a message to stream output from Claude Code CLI.'}
                       </div>
-                    )
-                  }
-
-                  if (chatMessage.role === 'system') {
-                    return (
-                      <div key={chatMessage.id} className={`message-group message-system ${chatMessage.error ? 'message-system-error' : ''}`}>
-                        <div className="assistant-avatar system">SYS</div>
-                        <div className="message-content">
-                          <div className={`message-bubble message-bubble-system ${chatMessage.error ? 'message-bubble-error' : ''}`}>
-                            <ChatMessageContent text={chatMessage.text} />
-                          </div>
-                          <div className="message-time">{formatRelativeTime(chatMessage.createdAt)}</div>
-                        </div>
-                      </div>
-                    )
-                  }
-
-                  return (
-                    <div key={chatMessage.id} className={`message-group message-assistant ${chatMessage.error ? 'message-assistant-error' : ''}`}>
-                      <div className="assistant-avatar">AI</div>
-                      <div className="message-content">
-                        {(chatMessage.toolUses ?? []).map((toolUse) => (
-                          <div key={toolUse.id} className="tool-use-group">
-                            <div className={`tool-use ${toolUse.error ? 'tool-use-error' : ''}`}>
-                              <div className={`tool-icon ${toolUse.kind}`}>{toolUse.kind.slice(0, 1).toUpperCase()}</div>
-                              <span className="tool-name">{toolUse.name}</span>
-                              <span className="tool-target">{toolUse.target}</span>
-                              {toolUse.detail && <span className="tool-detail">{toolUse.detail}</span>}
-                              <div className="tool-status">
-                                <div className="dot" />
-                                <span>{toolUse.status}</span>
-                              </div>
+                    </div>
+                  ) : (
+                    activeChatMessages.map((chatMessage) => {
+                      if (chatMessage.role === 'user') {
+                        return (
+                          <div key={chatMessage.id} className="message-group message-user">
+                            <div className="message-bubble">
+                              <p>{chatMessage.text}</p>
                             </div>
-                            {toolUse.output && (
-                              <div className={`tool-output ${toolUse.error ? 'tool-output-error' : ''}`}>
-                                <ChatMessageContent text={toolUse.output} />
-                              </div>
-                            )}
                           </div>
-                        ))}
+                        )
+                      }
 
-                        <div className={`message-bubble ${chatMessage.error ? 'message-bubble-error' : ''}`}>
-                          <ChatMessageContent text={chatMessage.text || (chatMessage.streaming ? '...' : '')} />
-                          {chatMessage.streaming && <span className="cursor-blink" />}
+                      if (chatMessage.role === 'system') {
+                        return (
+                          <div key={chatMessage.id} className={`message-group message-system ${chatMessage.error ? 'message-system-error' : ''}`}>
+                            <div className="assistant-avatar system">SYS</div>
+                            <div className="message-content">
+                              <div className={`message-bubble message-bubble-system ${chatMessage.error ? 'message-bubble-error' : ''}`}>
+                                <ChatMessageContent text={chatMessage.text} />
+                              </div>
+                              <div className="message-time">{formatRelativeTime(chatMessage.createdAt)}</div>
+                            </div>
+                          </div>
+                        )
+                      }
+
+                      return (
+                        <div key={chatMessage.id} className={`message-group message-assistant ${chatMessage.error ? 'message-assistant-error' : ''}`}>
+                          <div className="assistant-avatar">AI</div>
+                          <div className="message-content">
+                            {(chatMessage.toolUses ?? []).map((toolUse) => (
+                              <div key={toolUse.id} className="tool-use-group">
+                                <div className={`tool-use ${toolUse.error ? 'tool-use-error' : ''}`}>
+                                  <div className={`tool-icon ${toolUse.kind}`}>{toolUse.kind.slice(0, 1).toUpperCase()}</div>
+                                  <span className="tool-name">{toolUse.name}</span>
+                                  <span className="tool-target">{toolUse.target}</span>
+                                  {toolUse.detail && <span className="tool-detail">{toolUse.detail}</span>}
+                                  <div className="tool-status">
+                                    <div className="dot" />
+                                    <span>{toolUse.status}</span>
+                                  </div>
+                                </div>
+                                {toolUse.output && (
+                                  <div className={`tool-output ${toolUse.error ? 'tool-output-error' : ''}`}>
+                                    <ChatMessageContent text={toolUse.output} />
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+
+                            <div className={`message-bubble ${chatMessage.error ? 'message-bubble-error' : ''}`}>
+                              <ChatMessageContent text={chatMessage.text || (chatMessage.streaming ? '...' : '')} />
+                              {chatMessage.streaming && <span className="cursor-blink" />}
+                            </div>
+                            <div className="message-time">
+                              {chatMessage.streaming ? (
+                                <span className="streaming-indicator">
+                                  <span className="streaming-dots">
+                                    <span />
+                                    <span />
+                                    <span />
+                                  </span>
+                                  streaming
+                                </span>
+                              ) : (
+                                formatRelativeTime(chatMessage.createdAt)
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <div className="message-time">
-                          {chatMessage.streaming ? (
-                            <span className="streaming-indicator">
-                              <span className="streaming-dots">
-                                <span />
-                                <span />
-                                <span />
-                              </span>
-                              streaming
-                            </span>
-                          ) : (
-                            formatRelativeTime(chatMessage.createdAt)
+                      )
+                    })
+                  )}
+
+                  {!hasChatActivity ? (
+                    <section className="chat-secondary-panel">
+                      <section className="chat-context-picker">
+                        <div className="chat-secondary-title">Context for This Topic</div>
+                        <div className="chat-context-picker-actions">
+                          <button
+                            type="button"
+                            className="chat-item-action"
+                            onClick={() => void handleSelectAllActiveTopicContextDocs()}
+                            disabled={projectContextDocs.length === 0 || isSendingChat}
+                          >
+                            Select All
+                          </button>
+                          <button
+                            type="button"
+                            className="chat-item-action"
+                            onClick={() => void handleClearActiveTopicContextDocs()}
+                            disabled={activeContextDocs.length === 0 || isSendingChat}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        <div className="chat-context-picker-list">
+                          {projectContextDocs.map((doc, index) => {
+                            const key = normalizeContextDocKey(doc)
+                            const resolution = projectContextResolutionByKey.get(key)
+                            const status: 'ok' | 'missing' | 'invalid' = resolution
+                              ? resolution.exists
+                                ? 'ok'
+                                : inferContextResolutionStatus(resolution)
+                              : 'invalid'
+                            const checked = activeContextKeySet.has(key)
+
+                            return (
+                              <label key={`${key}-${index}`} className={`chat-context-picker-item context-item-${status}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(event) => void handleToggleActiveTopicContextDoc(doc, event.target.checked)}
+                                  disabled={isSendingChat}
+                                />
+                                <span className="chat-context-picker-label">{renderContextReference(doc)}</span>
+                                <span className={`context-status-badge ${status}`}>{status}</span>
+                              </label>
+                            )
+                          })}
+                          {projectContextDocs.length === 0 && (
+                            <p className="section-empty">No project context docs configured yet. Add them in the Context tab.</p>
                           )}
                         </div>
+                      </section>
+
+                      <div className="chat-secondary-card">
+                        <div className="chat-secondary-title">Linked Sessions</div>
+                        {renderLinkedSessionsList(activeTabLinkedChats, 'full', linkedSessionEmptyMessage)}
                       </div>
-                    </div>
-                  )
-                })
-              )}
-
-              {!hasChatActivity ? (
-                <section className="chat-secondary-panel">
-                  <section className="chat-context-picker">
-                    <div className="chat-secondary-title">Context for This Topic</div>
-                    <div className="chat-context-picker-actions">
-                      <button
-                        type="button"
-                        className="chat-item-action"
-                        onClick={() => void handleSelectAllActiveTopicContextDocs()}
-                        disabled={projectContextDocs.length === 0 || isSendingChat}
-                      >
-                        Select All
-                      </button>
-                      <button
-                        type="button"
-                        className="chat-item-action"
-                        onClick={() => void handleClearActiveTopicContextDocs()}
-                        disabled={activeContextDocs.length === 0 || isSendingChat}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                    <div className="chat-context-picker-list">
-                      {projectContextDocs.map((doc, index) => {
-                        const key = normalizeContextDocKey(doc)
-                        const resolution = projectContextResolutionByKey.get(key)
-                        const status: 'ok' | 'missing' | 'invalid' = resolution
-                          ? resolution.exists
-                            ? 'ok'
-                            : inferContextResolutionStatus(resolution)
-                          : 'invalid'
-                        const checked = activeContextKeySet.has(key)
-
-                        return (
-                          <label key={`${key}-${index}`} className={`chat-context-picker-item context-item-${status}`}>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(event) => void handleToggleActiveTopicContextDoc(doc, event.target.checked)}
-                              disabled={isSendingChat}
-                            />
-                            <span className="chat-context-picker-label">{renderContextReference(doc)}</span>
-                            <span className={`context-status-badge ${status}`}>{status}</span>
-                          </label>
-                        )
-                      })}
-                      {projectContextDocs.length === 0 && (
-                        <p className="section-empty">No project context docs configured yet. Add them in the Context tab.</p>
+                    </section>
+                  ) : (
+                    <section className="chat-secondary-minimized">
+                      <div className="chat-secondary-minimized-row">
+                        <span>Linked sessions ({activeTabLinkedChats.length})</span>
+                        <button
+                          type="button"
+                          className="chat-secondary-minimized-toggle"
+                          onClick={() => setShowLinkedSessionsPanel((current) => !current)}
+                        >
+                          {showLinkedSessionsPanel ? 'Hide' : 'Manage'}
+                        </button>
+                      </div>
+                      {showLinkedSessionsPanel && (
+                        <div className="chat-secondary-minimized-body">
+                          {renderLinkedSessionsList(activeTabLinkedChats, 'compact', linkedSessionEmptyMessage)}
+                        </div>
                       )}
-                    </div>
-                  </section>
+                    </section>
+                  )}
+                </div>
+              </div>
 
-                  <div className="chat-secondary-card">
-                    <div className="chat-secondary-title">Linked Sessions</div>
-                    {renderLinkedSessionsList(activeTabLinkedChats, 'full', linkedSessionEmptyMessage)}
-                  </div>
-                </section>
-              ) : (
-                <section className="chat-secondary-minimized">
-                  <div className="chat-secondary-minimized-row">
-                    <span>Linked sessions ({activeTabLinkedChats.length})</span>
+              <form
+                className="input-bar"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void handleSendChatMessage()
+                }}
+              >
+                <div className="input-wrapper">
+                  <textarea
+                    ref={chatInputRef}
+                    className="input-textarea"
+                    value={chatInput}
+                    onChange={(event) => handleChatInputChange(event.target.value, event.currentTarget)}
+                    onKeyDown={handleChatInputKeyDown}
+                    placeholder={`Message Claude about ${detail.workstream.name}...`}
+                    rows={1}
+                    disabled={isSendingChat || isTerminalActiveForActiveConversation}
+                  />
+                  <div className="input-actions">
                     <button
                       type="button"
-                      className="chat-secondary-minimized-toggle"
-                      onClick={() => setShowLinkedSessionsPanel((current) => !current)}
+                      className="input-btn btn-stop"
+                      onClick={() => void handleCancelActiveStream()}
+                      disabled={!activeStreamId}
                     >
-                      {showLinkedSessionsPanel ? 'Hide' : 'Manage'}
+                      Stop
+                    </button>
+                    <button
+                      type="submit"
+                      className="input-btn btn-send"
+                      disabled={isSendingChat || isTerminalActiveForActiveConversation || !chatInput.trim()}
+                    >
+                      Send
                     </button>
                   </div>
-                  {showLinkedSessionsPanel && (
-                    <div className="chat-secondary-minimized-body">
-                      {renderLinkedSessionsList(activeTabLinkedChats, 'compact', linkedSessionEmptyMessage)}
-                    </div>
-                  )}
-                </section>
-              )}
-            </div>
-          </div>
-
-          <form
-            className="input-bar"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void handleSendChatMessage()
-            }}
-          >
-            <div className="input-wrapper">
-              <textarea
-                ref={chatInputRef}
-                className="input-textarea"
-                value={chatInput}
-                onChange={(event) => handleChatInputChange(event.target.value, event.currentTarget)}
-                onKeyDown={handleChatInputKeyDown}
-                placeholder={`Message Claude about ${detail.workstream.name}...`}
-                rows={1}
-                disabled={isSendingChat}
-              />
-              <div className="input-actions">
-                <button type="button" className="input-btn btn-stop" onClick={() => void handleCancelActiveStream()} disabled={!activeStreamId}>
-                  Stop
-                </button>
-                <button type="submit" className="input-btn btn-send" disabled={isSendingChat || !chatInput.trim()}>
-                  Send
-                </button>
-              </div>
-            </div>
-            {(activePendingQuestion || activePendingPermission) && (
-              <div className="pending-actions">
-                {activePendingQuestion && (
-                  <div className="pending-card">
-                    <p className="pending-title">Claude is asking for input</p>
-                    <p className="pending-text">{activePendingQuestion.text}</p>
-                    <div className="pending-buttons">
-                      {activePendingQuestion.options.map((option) => (
-                        <button
-                          key={`${option.label}-${option.description ?? ''}`}
-                          type="button"
-                          className="pending-btn"
-                          onClick={() => void handleAnswerPendingQuestion(option)}
-                          disabled={isSendingChat}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
+                </div>
+                {isTerminalActiveForActiveConversation && (
+                  <p className="terminal-chat-banner">Terminal session is active for this topic. Stop terminal or switch to Terminal view to continue.</p>
+                )}
+                {(activePendingQuestion || activePendingPermission) && (
+                  <div className="pending-actions">
+                    {activePendingQuestion && (
+                      <div className="pending-card">
+                        <p className="pending-title">Claude is asking for input</p>
+                        <p className="pending-text">{activePendingQuestion.text}</p>
+                        <div className="pending-buttons">
+                          {activePendingQuestion.options.map((option) => (
+                            <button
+                              key={`${option.label}-${option.description ?? ''}`}
+                              type="button"
+                              className="pending-btn"
+                              onClick={() => void handleAnswerPendingQuestion(option)}
+                              disabled={isSendingChat}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {activePendingPermission && (
+                      <div className="pending-card pending-card-warning">
+                        <p className="pending-title">Claude needs permission</p>
+                        <p className="pending-text">{activePendingPermission.message}</p>
+                        <div className="pending-buttons">
+                          <button
+                            type="button"
+                            className="pending-btn pending-btn-primary"
+                            onClick={() => void handleApprovePendingPermission()}
+                            disabled={isSendingChat}
+                          >
+                            Approve and Continue
+                          </button>
+                          <button
+                            type="button"
+                            className="pending-btn"
+                            onClick={() => void handleRejectPendingPermission()}
+                            disabled={isSendingChat}
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
-                {activePendingPermission && (
-                  <div className="pending-card pending-card-warning">
-                    <p className="pending-title">Claude needs permission</p>
-                    <p className="pending-text">{activePendingPermission.message}</p>
-                    <div className="pending-buttons">
-                      <button
-                        type="button"
-                        className="pending-btn pending-btn-primary"
-                        onClick={() => void handleApprovePendingPermission()}
-                        disabled={isSendingChat}
-                      >
-                        Approve and Continue
-                      </button>
-                      <button
-                        type="button"
-                        className="pending-btn"
-                        onClick={() => void handleRejectPendingPermission()}
-                        disabled={isSendingChat}
-                      >
-                        Deny
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="input-hint">
-              <span>
-                <kbd>Enter</kbd> to send
-              </span>
-              <span>
-                <kbd>Shift+Enter</kbd> for new line
-              </span>
-              <span className="input-model">claude-opus-4-6 via Max</span>
-            </div>
-            {activeChatSendError && <p className="detail-inline-error">{activeChatSendError}</p>}
-          </form>
+                <div className="input-hint">
+                  <span>
+                    <kbd>Enter</kbd> to send
+                  </span>
+                  <span>
+                    <kbd>Shift+Enter</kbd> for new line
+                  </span>
+                  <span className="input-model">claude-opus-4-6 via Max</span>
+                </div>
+                {activeChatSendError && <p className="detail-inline-error">{activeChatSendError}</p>}
+                {activeTerminalError && <p className="detail-inline-error">{activeTerminalError}</p>}
+              </form>
+            </>
+          )}
         </div>
       )}
 
