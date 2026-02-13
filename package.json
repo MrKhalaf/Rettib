@@ -8,14 +8,18 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "package": "npm run build && electron-builder --config electron-builder.yml"
+    "package": "npm run build && electron-builder --config electron-builder.yml",
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.17.0",
     "better-sqlite3": "^11.7.0",
     "level": "^8.0.1",
+    "node-pty": "^1.0.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "xterm": "^5.3.0",
+    "xterm-addon-fit": "^0.8.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.8",

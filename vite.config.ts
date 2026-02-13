@@ -19,7 +19,7 @@ export default defineConfig({
             outDir: path.join(projectRoot, 'dist-electron'),
             emptyOutDir: true,
             rollupOptions: {
-              external: ['better-sqlite3', 'level'],
+              external: ['better-sqlite3', 'level', 'node-pty'],
               output: {
                 format: 'es',
                 entryFileNames: 'index.js'
