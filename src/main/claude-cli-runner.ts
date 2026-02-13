@@ -17,6 +17,7 @@ interface ClaudeCliRequest {
   resume_session_id?: string | null
   model?: string | null
   permission_mode?: 'acceptEdits' | 'bypassPermissions' | 'default' | 'delegate' | 'dontAsk' | 'plan' | null
+  dangerously_skip_permissions?: boolean
 }
 
 interface ActiveStream {
@@ -105,7 +106,7 @@ function isUsableClaudeExecutable(candidatePath: string, pathEnv: string): boole
   return probe.status === 0
 }
 
-function buildChildPathEnv(): string {
+export function buildChildPathEnv(): string {
   const existingPath = process.env.PATH ?? ''
   const pathParts = existingPath.split(path.delimiter).filter((part) => part.trim().length > 0)
   const merged = [...pathParts, ...getKnownClaudeBinDirs()]
@@ -130,6 +131,17 @@ function resolveClaudeExecutable(pathEnv: string): string | null {
 
   cachedClaudeExecutable = null
   return null
+}
+
+export function resolveClaudeExecutableOrThrow(pathEnv: string): string {
+  const executable = resolveClaudeExecutable(pathEnv)
+  if (!executable) {
+    throw new Error(
+      'Claude CLI was not found. Install it and ensure it is in PATH, or set RETTIB_CLAUDE_BIN to the full binary path.'
+    )
+  }
+
+  return executable
 }
 
 function emitStreamEvent(event: IpcMainInvokeEvent, payload: ChatStreamEvent): void {
@@ -362,6 +374,10 @@ function buildClaudeArgs(input: ClaudeCliRequest): string[] {
     args.push('--permission-mode', permissionMode)
   }
 
+  if (input.dangerously_skip_permissions) {
+    args.push('--dangerously-skip-permissions')
+  }
+
   return args
 }
 
@@ -375,12 +391,7 @@ export async function runClaudeCliStream(
 ): Promise<SendChatMessageResult> {
   const streamId = randomUUID()
   const childPathEnv = buildChildPathEnv()
-  const claudeExecutable = resolveClaudeExecutable(childPathEnv)
-  if (!claudeExecutable) {
-    throw new Error(
-      'Claude CLI was not found. Install it and ensure it is in PATH, or set RETTIB_CLAUDE_BIN to the full binary path.'
-    )
-  }
+  const claudeExecutable = resolveClaudeExecutableOrThrow(childPathEnv)
 
   const child = spawn(claudeExecutable, buildClaudeArgs(input), {
     cwd: input.cwd,
