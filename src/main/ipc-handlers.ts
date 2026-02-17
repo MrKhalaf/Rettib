@@ -691,7 +691,7 @@ export function registerIpcHandlers(): void {
     }
 
     const currentSession = getWorkstreamChatSession(payload.workstream_id, db)
-    const resolvedConversationUuid = payload.conversation_uuid ?? currentSession?.session_id ?? null
+    const resolvedConversationUuid = payload.conversation_uuid ?? null
     const persistedPreference = resolvedConversationUuid ? getChatSessionPreference(resolvedConversationUuid, db) : null
     const commandMode = payload.command_mode ?? persistedPreference?.command_mode ?? 'claude'
     const cwd = resolveChatCwd(
