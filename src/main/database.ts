@@ -1084,6 +1084,32 @@ export function unlinkChatReference(workstreamId: number, conversationUuid: stri
   ).run(workstreamId, conversationUuid)
 }
 
+export function renameChatReferenceTitle(
+  workstreamId: number,
+  conversationUuid: string,
+  conversationTitle: string,
+  db = getDatabase()
+): void {
+  const normalizedTitle = conversationTitle.trim()
+  if (!normalizedTitle) {
+    throw new Error('Session title must not be empty')
+  }
+
+  const result = db
+    .prepare(
+      `
+      UPDATE chat_references
+      SET source = 'manual', conversation_title = ?, linked_at = ?
+      WHERE workstream_id = ? AND conversation_uuid = ?
+      `
+    )
+    .run(normalizedTitle, nowMs(), workstreamId, conversationUuid)
+
+  if (result.changes === 0) {
+    throw new Error(`Session ${conversationUuid} is not linked to workstream ${workstreamId}`)
+  }
+}
+
 export function getWorkstreamChatSession(workstreamId: number, db = getDatabase()): WorkstreamChatSession | null {
   const row = db
     .prepare(

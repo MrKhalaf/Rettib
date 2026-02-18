@@ -294,6 +294,7 @@ export interface ElectronApi {
     getConversationPreview: (conversationUuid: string, limit?: number) => Promise<ClaudeConversationPreviewMessage[]>
     link: (workstreamId: number, conversationUuid: string) => Promise<void>
     unlink: (workstreamId: number, conversationUuid: string) => Promise<void>
+    renameSession: (workstreamId: number, conversationUuid: string, title: string) => Promise<void>
     getWorkstreamSession: (workstreamId: number) => Promise<WorkstreamChatSession | null>
     getWorkstreamContext: (workstreamId: number) => Promise<WorkstreamContextDoc[]>
     setWorkstreamContext: (workstreamId: number, docs: ContextDocInput[]) => Promise<WorkstreamContextDoc[]>

@@ -46,6 +46,7 @@ import {
   listProgress,
   listSyncRuns,
   listTasks,
+  renameChatReferenceTitle,
   logProgress,
   unlinkChatReference,
   updateClaudeSourcePath,
@@ -618,6 +619,22 @@ export function registerIpcHandlers(): void {
     unlinkChatReference(id, uuid, getDatabase())
   })
 
+  ipcMain.handle('chat:rename-session', async (_event, workstreamId: unknown, conversationUuid: unknown, title: unknown) => {
+    const id = ensureNumber(workstreamId, 'workstream id')
+    const uuid = ensureString(conversationUuid, 'conversation uuid').trim()
+    if (!uuid) {
+      throw new Error('conversation uuid must not be empty')
+    }
+
+    const rawTitle = ensureString(title, 'session title')
+    const normalizedTitle = normalizeConversationTitle(rawTitle)
+    if (!normalizedTitle) {
+      throw new Error('session title must not be empty')
+    }
+
+    renameChatReferenceTitle(id, uuid, normalizedTitle, getDatabase())
+  })
+
   ipcMain.handle('chat:get-workstream-session', async (_event, workstreamId: unknown) => {
     const id = ensureNumber(workstreamId, 'workstream id')
     return getWorkstreamChatSession(id, getDatabase())
@@ -808,12 +825,16 @@ export function registerIpcHandlers(): void {
       const existingTitle = normalizeConversationTitle(existingReference?.conversation_title ?? null)
       const workstreamNameTitle = normalizeConversationTitle(workstream.name)
       const preferredExistingTitle = areTitlesEqual(existingTitle, workstreamNameTitle) ? null : existingTitle
+      const hasManualTitle = existingReference?.source === 'manual' && Boolean(existingTitle)
 
       const connector = makeConnectorFromSource()
       const conversation = await connector.getConversationDetail(sessionId).catch(() => null)
       const connectorTitle = normalizeConversationTitle(conversation?.title ?? null)
       const messageTopicTitle = deriveTopicTitleFromMessage(payload.message)
-      const resolvedConversationTitle = connectorTitle ?? preferredExistingTitle ?? messageTopicTitle ?? DEFAULT_TOPIC_TITLE
+      const resolvedConversationTitle = hasManualTitle
+        ? (existingTitle as string)
+        : connectorTitle ?? preferredExistingTitle ?? messageTopicTitle ?? DEFAULT_TOPIC_TITLE
+      const referenceSource = hasManualTitle ? 'manual' : 'claude_cli'
 
       linkChatReference(
         payload.workstream_id,
@@ -822,7 +843,7 @@ export function registerIpcHandlers(): void {
           conversation_title: resolvedConversationTitle,
           last_user_message: payload.message,
           chat_timestamp: Date.now(),
-          source: 'claude_cli'
+          source: referenceSource
         },
         db
       )

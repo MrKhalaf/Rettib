@@ -18,6 +18,8 @@ export const chatApi = {
     getElectronApi().chat.link(workstreamId, conversationUuid),
   unlink: (workstreamId: number, conversationUuid: string) =>
     getElectronApi().chat.unlink(workstreamId, conversationUuid),
+  renameSession: (workstreamId: number, conversationUuid: string, title: string) =>
+    getElectronApi().chat.renameSession(workstreamId, conversationUuid, title),
   getWorkstreamSession: (workstreamId: number) => getElectronApi().chat.getWorkstreamSession(workstreamId),
   getWorkstreamContext: (workstreamId: number) => getElectronApi().chat.getWorkstreamContext(workstreamId),
   setWorkstreamContext: (workstreamId: number, docs: ContextDocInput[]) =>

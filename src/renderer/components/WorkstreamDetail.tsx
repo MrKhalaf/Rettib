@@ -607,6 +607,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
   const [showLinkedSessionsPanel, setShowLinkedSessionsPanel] = useState(false)
   const [expandedLinkedConversationId, setExpandedLinkedConversationId] = useState<string | null>(null)
   const [conversationPreviews, setConversationPreviews] = useState<Record<string, ConversationPreviewState>>({})
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
+  const [renameTabDraft, setRenameTabDraft] = useState('')
   const [newTopicCount, setNewTopicCount] = useState(1)
 
   const activeAssistantMessageIdRef = useRef<string | null>(null)
@@ -1047,6 +1049,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     setShowLinkedSessionsPanel(false)
     setExpandedLinkedConversationId(null)
     setConversationPreviews({})
+    setRenamingTabId(null)
+    setRenameTabDraft('')
     setNewTopicCount(1)
 
     activeStreamIdRef.current = null
@@ -1170,6 +1174,17 @@ export function WorkstreamDetail({ workstreamId }: Props) {
       return mergedTabs
     })
   }, [detail, closedConversationIds])
+
+  useEffect(() => {
+    if (!renamingTabId) {
+      return
+    }
+
+    if (!chatTabs.some((tab) => tab.id === renamingTabId)) {
+      setRenamingTabId(null)
+      setRenameTabDraft('')
+    }
+  }, [chatTabs, renamingTabId])
 
   useEffect(() => {
     if (chatTabs.length === 0) {
@@ -2017,6 +2032,66 @@ export function WorkstreamDetail({ workstreamId }: Props) {
 
   function handleDismissSuggestion(conversationUuid: string) {
     setDismissedSuggestionIds((ids) => (ids.includes(conversationUuid) ? ids : [...ids, conversationUuid]))
+  }
+
+  function beginRenameChatTab(tabId: string) {
+    const tab = chatTabs.find((entry) => entry.id === tabId)
+    if (!tab) {
+      return
+    }
+
+    setTerminalErrorForTab(tabId, null)
+    setRenamingTabId(tabId)
+    setRenameTabDraft(tab.label)
+  }
+
+  function cancelRenameChatTab() {
+    setRenamingTabId(null)
+    setRenameTabDraft('')
+  }
+
+  async function commitRenameChatTab(tabId: string) {
+    if (renamingTabId !== tabId) {
+      return
+    }
+
+    const tab = chatTabs.find((entry) => entry.id === tabId)
+    if (!tab) {
+      cancelRenameChatTab()
+      return
+    }
+
+    const trimmedInput = renameTabDraft.trim()
+    if (!trimmedInput) {
+      setTerminalErrorForTab(tabId, 'Session name must not be empty.')
+      return
+    }
+
+    const conversationUuid = tab.resumeSessionId ?? tab.conversationUuid ?? null
+    const nextLabel = normalizeSessionLabel(trimmedInput, conversationUuid)
+    const previousLabel = tab.label
+    cancelRenameChatTab()
+    setTerminalErrorForTab(tabId, null)
+
+    if (nextLabel === previousLabel) {
+      return
+    }
+
+    setChatTabs((tabs) => tabs.map((entry) => (entry.id === tabId ? { ...entry, label: nextLabel } : entry)))
+
+    if (!conversationUuid || workstreamId === null) {
+      return
+    }
+
+    try {
+      await chatApi.renameSession(workstreamId, conversationUuid, trimmedInput)
+      void detailQuery.refetch()
+      void conversationsQuery.refetch()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to rename session'
+      setTerminalErrorForTab(tabId, message)
+      setChatTabs((tabs) => tabs.map((entry) => (entry.id === tabId ? { ...entry, label: previousLabel } : entry)))
+    }
   }
 
   async function handleToggleLinkedSessionPreview(conversationUuid: string) {
@@ -3046,13 +3121,55 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                 onClick={() => setActiveChatTabId(tab.id)}
               >
                 <span className="tab-icon">●</span>
-                <span>{tab.label}</span>
+                {renamingTabId === tab.id ? (
+                  <input
+                    type="text"
+                    className="tab-rename-input"
+                    value={renameTabDraft}
+                    autoFocus
+                    onClick={(event) => {
+                      event.stopPropagation()
+                    }}
+                    onChange={(event) => setRenameTabDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      event.stopPropagation()
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void commitRenameChatTab(tab.id)
+                        return
+                      }
+
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        cancelRenameChatTab()
+                      }
+                    }}
+                  />
+                ) : (
+                  <span>{tab.label}</span>
+                )}
+                <button
+                  type="button"
+                  className="tab-rename"
+                  title={renamingTabId === tab.id ? 'Save session name' : 'Rename session'}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    if (renamingTabId === tab.id) {
+                      void commitRenameChatTab(tab.id)
+                      return
+                    }
+
+                    beginRenameChatTab(tab.id)
+                  }}
+                >
+                  {renamingTabId === tab.id ? 'Save' : 'Edit'}
+                </button>
                 <button
                   type="button"
                   className="tab-close"
                   onClick={(event) => {
                     event.stopPropagation()
-                    handleCloseChatTab(tab.id)
+                    void handleCloseChatTab(tab.id)
                   }}
                 >
                   ×

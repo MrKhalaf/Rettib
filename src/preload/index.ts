@@ -26,6 +26,8 @@ const api: ElectronApi = {
       ipcRenderer.invoke('chat:get-conversation-preview', conversationUuid, limit),
     link: (workstreamId, conversationUuid) => ipcRenderer.invoke('chat:link', workstreamId, conversationUuid),
     unlink: (workstreamId, conversationUuid) => ipcRenderer.invoke('chat:unlink', workstreamId, conversationUuid),
+    renameSession: (workstreamId, conversationUuid, title) =>
+      ipcRenderer.invoke('chat:rename-session', workstreamId, conversationUuid, title),
     getWorkstreamSession: (workstreamId) => ipcRenderer.invoke('chat:get-workstream-session', workstreamId),
     getWorkstreamContext: (workstreamId) => ipcRenderer.invoke('chat:get-workstream-context', workstreamId),
     setWorkstreamContext: (workstreamId, docs) => ipcRenderer.invoke('chat:set-workstream-context', workstreamId, docs),
