@@ -1042,6 +1042,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     setTerminalErrorsByTab({})
     setIsSendingChat(false)
     setActiveStreamId(null)
+    setChatSessionId(null)
+    setChatProjectCwd(null)
     setChatTabs([])
     setActiveChatTabId(null)
     setClosedConversationIds([])
@@ -2139,7 +2141,27 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     }
   }
 
-  function handleCloseChatTab(tabId: string) {
+  async function handleCloseChatTab(tabId: string) {
+    const tabToClose = chatTabs.find((tab) => tab.id === tabId)
+    if (!tabToClose) {
+      return
+    }
+
+    const conversationUuid = tabToClose.resumeSessionId ?? tabToClose.conversationUuid ?? null
+    if (terminalState.is_active && conversationUuid && terminalState.conversation_uuid === conversationUuid) {
+      await handleStopTerminalSession()
+    }
+
+    if (conversationUuid && workstreamId !== null) {
+      try {
+        await handleUnlink(conversationUuid)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to archive session'
+        setTerminalErrorForTab(tabId, message)
+        return
+      }
+    }
+
     setChatMessagesByTab((previous) => {
       if (!(tabId in previous)) {
         return previous
@@ -2201,22 +2223,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     }
 
     setChatTabs((tabs) => {
-      const closingTab = tabs.find((tab) => tab.id === tabId)
-      if (!closingTab) {
+      if (!tabs.some((tab) => tab.id === tabId)) {
         return tabs
-      }
-
-      if (
-        terminalState.is_active &&
-        closingTab.resumeSessionId &&
-        terminalState.conversation_uuid &&
-        closingTab.resumeSessionId === terminalState.conversation_uuid
-      ) {
-        void handleStopTerminalSession()
-      }
-
-      if (closingTab.kind === 'linked' && closingTab.conversationUuid) {
-        setClosedConversationIds((ids) => (ids.includes(closingTab.conversationUuid as string) ? ids : [...ids, closingTab.conversationUuid as string]))
       }
 
       const remainingTabs = tabs.filter((tab) => tab.id !== tabId)
@@ -2520,7 +2528,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
     const payload = {
       workstream_id: workstreamId,
       conversation_uuid: activeTab.resumeSessionId,
-      cwd: chatProjectCwd ?? detail?.workstream.chat_run_directory ?? null,
+      cwd: detail?.workstream.chat_run_directory ?? chatProjectCwd ?? null,
       command_mode: activeCommandMode
     }
 

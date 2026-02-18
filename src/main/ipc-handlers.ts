@@ -169,6 +169,23 @@ function resolveChatCwd(...candidates: Array<string | null | undefined>): string
   return os.homedir()
 }
 
+function resolveChatCwdForWorkstream(
+  workstreamRunDirectory: string | null | undefined,
+  ...fallbackCandidates: Array<string | null | undefined>
+): string {
+  const trimmedRunDirectory = typeof workstreamRunDirectory === 'string' ? workstreamRunDirectory.trim() : ''
+  if (trimmedRunDirectory) {
+    const normalizedRunDirectory = normalizePathInput(trimmedRunDirectory)
+    if (!isExistingDirectory(normalizedRunDirectory)) {
+      throw new Error(`Configured run directory does not exist: ${trimmedRunDirectory}`)
+    }
+
+    return normalizedRunDirectory as string
+  }
+
+  return resolveChatCwd(...fallbackCandidates)
+}
+
 function parsePickContextFileOptions(value: unknown): { defaultPath: string | null } {
   if (value === undefined || value === null) {
     return { defaultPath: null }
@@ -711,9 +728,9 @@ export function registerIpcHandlers(): void {
     const resolvedConversationUuid = payload.conversation_uuid ?? null
     const persistedPreference = resolvedConversationUuid ? getChatSessionPreference(resolvedConversationUuid, db) : null
     const commandMode = payload.command_mode ?? persistedPreference?.command_mode ?? 'claude'
-    const cwd = resolveChatCwd(
-      payload.cwd ?? null,
+    const cwd = resolveChatCwdForWorkstream(
       workstream.chat_run_directory,
+      payload.cwd ?? null,
       currentSession?.project_cwd ?? null,
       process.cwd(),
       os.homedir()
@@ -773,9 +790,9 @@ export function registerIpcHandlers(): void {
     }
 
     const currentSession = getWorkstreamChatSession(payload.workstream_id, db)
-    const cwd = resolveChatCwd(
-      payload.cwd ?? null,
+    const cwd = resolveChatCwdForWorkstream(
       workstream.chat_run_directory,
+      payload.cwd ?? null,
       currentSession?.project_cwd ?? null,
       process.cwd(),
       os.homedir()
