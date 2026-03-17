@@ -1,0 +1,13 @@
+/* Theme overrides — activated via data-theme attribute on <html> */
+
+[data-theme='horizon'] {
+  --accent: #3fc1c9;
+}
+
+[data-theme='neon'] {
+  --accent: #00ff88;
+}
+
+[data-theme='ember'] {
+  --accent: #d4915c;
+}
