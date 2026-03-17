@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { CreateWorkstreamInput } from '../shared/types'
 import { Dashboard } from './components/Dashboard'
 import { QuickCapture } from './components/QuickCapture'
+import type { Theme } from './components/ThemeToggle'
+import { ThemeToggle } from './components/ThemeToggle'
 import { WorkstreamDetail } from './components/WorkstreamDetail'
 import { useLogProgress } from './hooks/useProgress'
 import { useCreateWorkstream, useWorkstreams } from './hooks/useWorkstreams'
@@ -11,6 +13,7 @@ export default function App() {
   const [selectedWorkstreamId, setSelectedWorkstreamId] = useState<number | null>(null)
   const [showArchived, setShowArchived] = useState(false)
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false)
+  const [theme, setTheme] = useState<Theme>('original')
 
   const workstreamsQuery = useWorkstreams()
   const createWorkstreamMutation = useCreateWorkstream()
@@ -52,6 +55,14 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeydown)
   }, [])
 
+  useEffect(() => {
+    if (theme === 'original') {
+      document.documentElement.removeAttribute('data-theme')
+    } else {
+      document.documentElement.setAttribute('data-theme', theme)
+    }
+  }, [theme])
+
   async function handleCreateWorkstream(payload: CreateWorkstreamInput) {
     const created = await createWorkstreamMutation.mutateAsync(payload)
     setSelectedWorkstreamId(created.id)
@@ -87,6 +98,8 @@ export default function App() {
         onClose={() => setQuickCaptureOpen(false)}
         onSubmit={handleQuickCapture}
       />
+
+      <ThemeToggle theme={theme} onChange={setTheme} />
     </div>
   )
 }
