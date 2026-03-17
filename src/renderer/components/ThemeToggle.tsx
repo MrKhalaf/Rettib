@@ -1,18 +1,18 @@
 import type { CSSProperties } from 'react'
 
-export type Theme = 'original' | 'horizon' | 'neon' | 'ember'
+const THEMES = [
+  { id: 'original', label: 'Original', accent: '#c9a04e' },
+  { id: 'horizon', label: 'Horizon', accent: '#58a6ff' },
+  { id: 'neon', label: 'Neon', accent: '#00ff88' },
+  { id: 'ember', label: 'Ember', accent: '#d4915c' }
+] as const
+
+export type Theme = (typeof THEMES)[number]['id']
 
 interface Props {
   theme: Theme
   onChange: (theme: Theme) => void
 }
-
-const THEMES: { id: Theme; label: string; accent: string }[] = [
-  { id: 'original', label: 'Original', accent: '#c9a04e' },
-  { id: 'horizon', label: 'Horizon', accent: '#3fc1c9' },
-  { id: 'neon', label: 'Neon', accent: '#00ff88' },
-  { id: 'ember', label: 'Ember', accent: '#d4915c' }
-]
 
 const containerStyle: CSSProperties = {
   position: 'fixed',
@@ -30,8 +30,8 @@ const containerStyle: CSSProperties = {
   border: '1px solid rgba(255, 255, 255, 0.08)'
 }
 
-function buttonStyle(active: boolean): CSSProperties {
-  return {
+const buttonStyles = {
+  active: {
     display: 'flex',
     alignItems: 'center',
     gap: 4,
@@ -40,23 +40,41 @@ function buttonStyle(active: boolean): CSSProperties {
     borderRadius: 14,
     cursor: 'pointer',
     fontSize: 11,
-    fontWeight: active ? 600 : 400,
+    fontWeight: 600,
     fontFamily: 'inherit',
-    color: active ? '#fff' : 'rgba(255, 255, 255, 0.55)',
-    background: active ? 'rgba(255, 255, 255, 0.12)' : 'transparent',
+    color: '#fff',
+    background: 'rgba(255, 255, 255, 0.12)',
     transition: 'all 0.15s ease'
-  }
+  } as CSSProperties,
+  inactive: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '3px 8px',
+    border: 'none',
+    borderRadius: 14,
+    cursor: 'pointer',
+    fontSize: 11,
+    fontWeight: 400,
+    fontFamily: 'inherit',
+    color: 'rgba(255, 255, 255, 0.55)',
+    background: 'transparent',
+    transition: 'all 0.15s ease'
+  } as CSSProperties
 }
 
-function dotStyle(accent: string): CSSProperties {
-  return {
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    background: accent,
-    flexShrink: 0
-  }
-}
+const dotStyles: Record<Theme, CSSProperties> = Object.fromEntries(
+  THEMES.map((t) => [
+    t.id,
+    {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: t.accent,
+      flexShrink: 0
+    } as CSSProperties
+  ])
+) as Record<Theme, CSSProperties>
 
 export function ThemeToggle({ theme, onChange }: Props) {
   return (
@@ -65,11 +83,11 @@ export function ThemeToggle({ theme, onChange }: Props) {
         <button
           key={t.id}
           type="button"
-          style={buttonStyle(theme === t.id)}
+          style={theme === t.id ? buttonStyles.active : buttonStyles.inactive}
           onClick={() => onChange(t.id)}
           title={t.label}
         >
-          <span style={dotStyle(t.accent)} />
+          <span style={dotStyles[t.id]} />
           <span>{t.label}</span>
         </button>
       ))}

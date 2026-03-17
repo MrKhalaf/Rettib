@@ -61,6 +61,9 @@ export default function App() {
     } else {
       document.documentElement.setAttribute('data-theme', theme)
     }
+    return () => {
+      document.documentElement.removeAttribute('data-theme')
+    }
   }, [theme])
 
   async function handleCreateWorkstream(payload: CreateWorkstreamInput) {

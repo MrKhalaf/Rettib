@@ -156,6 +156,10 @@
   --radius-sm: 3px;
   --radius-md: 5px;
   --radius-lg: 8px;
+  --neon-glow-strong: rgba(0, 255, 136, 0.4);
+  --neon-glow-medium: rgba(0, 255, 136, 0.15);
+  --neon-glow-subtle: rgba(0, 255, 136, 0.08);
+  --neon-glow-faint: rgba(0, 255, 136, 0.02);
 }
 
 /* Neon: push sidebar to the right */
@@ -171,25 +175,25 @@
 /* Neon: glowing brand */
 [data-theme="neon"] .sidebar-brand h1 {
   color: var(--accent);
-  text-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+  text-shadow: 0 0 20px var(--neon-glow-strong);
 }
 
 [data-theme="neon"] .sidebar-brand svg {
   stroke: var(--accent);
-  filter: drop-shadow(0 0 6px rgba(0, 255, 136, 0.4));
+  filter: drop-shadow(0 0 6px var(--neon-glow-strong));
 }
 
 /* Neon: active indicator on right edge */
 [data-theme="neon"] .workstream-item.active {
   border-left: none;
   border-right: 3px solid var(--accent);
-  box-shadow: inset -4px 0 12px rgba(0, 255, 136, 0.06);
+  box-shadow: inset -4px 0 12px var(--neon-glow-subtle);
 }
 
 /* Neon: glowing rank numbers */
 [data-theme="neon"] .ws-rank {
   font-family: var(--font-mono);
-  text-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+  text-shadow: 0 0 8px var(--neon-glow-strong);
 }
 
 /* Neon: detail tabs */
@@ -198,7 +202,7 @@
 }
 
 [data-theme="neon"] .detail-tab.active {
-  text-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+  text-shadow: 0 0 10px var(--neon-glow-strong);
 }
 
 /* Neon: sidebar controls with cyberpunk styling */
@@ -211,18 +215,18 @@
 
 [data-theme="neon"] .sidebar-control:hover {
   border-color: var(--accent);
-  box-shadow: 0 0 12px rgba(0, 255, 136, 0.15);
+  box-shadow: 0 0 12px var(--neon-glow-medium);
 }
 
 /* Neon: glowing modal */
 [data-theme="neon"] .modal {
   border: 1px solid rgba(0, 255, 136, 0.2);
-  box-shadow: 0 0 40px rgba(0, 255, 136, 0.08);
+  box-shadow: 0 0 40px var(--neon-glow-subtle);
 }
 
 /* Neon: message bubbles with subtle border */
 [data-theme="neon"] .message-bubble {
-  border: 1px solid rgba(0, 255, 136, 0.08);
+  border: 1px solid var(--neon-glow-subtle);
 }
 
 /* Neon: scanline overlay effect */
@@ -231,20 +235,20 @@
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 9999;
+  z-index: 9998;
   background: repeating-linear-gradient(
     0deg,
     transparent,
     transparent 2px,
-    rgba(0, 255, 136, 0.02) 2px,
-    rgba(0, 255, 136, 0.02) 4px
+    var(--neon-glow-faint) 2px,
+    var(--neon-glow-faint) 4px
   );
   opacity: 1;
 }
 
 /* Neon: detail header glow line */
 [data-theme="neon"] .detail-header-shell {
-  border-bottom: 1px solid rgba(0, 255, 136, 0.15);
+  border-bottom: 1px solid var(--neon-glow-medium);
 }
 
 
@@ -305,7 +309,7 @@
 [data-theme="ember"] .workstream-item {
   padding: 14px 16px;
   gap: 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   margin: 2px 8px;
   border-bottom: none;
 }
@@ -339,7 +343,7 @@
 
 /* Ember: pill-shaped controls */
 [data-theme="ember"] .sidebar-control {
-  border-radius: 20px;
+  border-radius: var(--radius-lg);
   padding: 7px 14px;
 }
 
@@ -351,7 +355,7 @@
 /* Ember: rounded create workstream form */
 [data-theme="ember"] .create-workstream {
   padding: 16px;
-  border-radius: 14px;
+  border-radius: var(--radius-md);
   margin: 4px 8px;
 }
 
@@ -362,7 +366,7 @@
 }
 
 [data-theme="ember"] .detail-tab {
-  border-radius: 20px;
+  border-radius: var(--radius-lg);
   padding: 6px 16px;
 }
 
@@ -372,7 +376,7 @@
 
 /* Ember: soft rounded modal with deep shadow */
 [data-theme="ember"] .modal {
-  border-radius: 20px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
@@ -386,5 +390,5 @@
 }
 
 [data-theme="ember"] .setting-card {
-  border-radius: 14px;
+  border-radius: var(--radius-md);
 }
