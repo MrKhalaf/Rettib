@@ -1,0 +1,394 @@
+/* ==========================================================================
+   RETTIB THEMES
+   Three distinct visual themes applied via [data-theme] on :root.
+   Each theme overrides CSS custom properties and provides layout changes.
+   ========================================================================== */
+
+
+/* ==========================================================================
+   THEME 1: HORIZON
+   Concept: Sidebar becomes a horizontal top bar. Blue-slate color palette.
+   Information-dense layout with vertical stacking.
+   ========================================================================== */
+
+:root[data-theme="horizon"] {
+  --bg-deep: #0d1117;
+  --bg-surface: #161b22;
+  --bg-raised: #1c2129;
+  --bg-hover: #242a35;
+  --bg-active: #2d3542;
+  --border: #30363d;
+  --border-subtle: #21262d;
+  --text-primary: #c9d1d9;
+  --text-secondary: #8b949e;
+  --text-tertiary: #484f58;
+  --accent: #58a6ff;
+  --accent-dim: #388bfd;
+  --accent-glow: rgba(88, 166, 255, 0.1);
+  --user-bg: #1a2233;
+  --assistant-bg: #13161d;
+  --success: #3fb950;
+  --error: #f85149;
+  --info: #58a6ff;
+  --code-bg: #0d1117;
+}
+
+/* Horizon: stack layout vertically */
+[data-theme="horizon"] .app-main {
+  flex-direction: column;
+}
+
+/* Horizon: sidebar becomes horizontal top bar */
+[data-theme="horizon"] .sidebar {
+  width: 100%;
+  height: auto;
+  max-height: 180px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+}
+
+[data-theme="horizon"] .sidebar-header {
+  flex-shrink: 0;
+  padding: 12px 16px 8px;
+  border-bottom: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+[data-theme="horizon"] .sidebar-brand {
+  margin-bottom: 0;
+}
+
+/* Hide the "Workstreams" label in horizontal mode */
+[data-theme="horizon"] .sidebar-label {
+  display: none;
+}
+
+[data-theme="horizon"] .sidebar-controls {
+  flex-direction: row;
+  padding: 4px 16px 8px;
+  gap: 6px;
+}
+
+[data-theme="horizon"] .sidebar-control {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+/* Horizon: workstream list scrolls horizontally */
+[data-theme="horizon"] .workstream-list {
+  display: flex;
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: 0;
+  padding: 0 8px;
+}
+
+[data-theme="horizon"] .workstream-item {
+  flex-shrink: 0;
+  width: auto;
+  min-width: 160px;
+  max-width: 220px;
+  border-bottom: none;
+  border-right: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+}
+
+[data-theme="horizon"] .workstream-item.active {
+  border-left: none;
+  border-bottom: 3px solid var(--accent);
+}
+
+/* Horizon: create workstream floats as a dropdown */
+[data-theme="horizon"] .create-workstream {
+  position: absolute;
+  top: 60px;
+  left: 16px;
+  z-index: 100;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  width: 300px;
+}
+
+[data-theme="horizon"] .detail-pane {
+  flex: 1;
+  min-height: 0;
+}
+
+[data-theme="horizon"] .sidebar-subtle-row {
+  padding: 4px 8px;
+}
+
+
+/* ==========================================================================
+   THEME 2: NEON
+   Concept: Sidebar on the RIGHT. Cyberpunk neon aesthetic with green/cyan
+   glow effects. Monospace font. Sharper corners. Scanline overlay.
+   ========================================================================== */
+
+:root[data-theme="neon"] {
+  --bg-deep: #05060a;
+  --bg-surface: #0a0c14;
+  --bg-raised: #0f1219;
+  --bg-hover: #141822;
+  --bg-active: #1a1f2d;
+  --border: #1e2840;
+  --border-subtle: #162030;
+  --text-primary: #eaffea;
+  --text-secondary: #a0d4a0;
+  --text-tertiary: #5a8a5a;
+  --accent: #00ff88;
+  --accent-dim: #00aa5c;
+  --accent-glow: rgba(0, 255, 136, 0.12);
+  --user-bg: #0a1a15;
+  --assistant-bg: #080a0f;
+  --success: #00ff88;
+  --error: #ff3366;
+  --info: #00d4ff;
+  --code-bg: #03050a;
+  --font-sans: 'Berkeley Mono', 'SF Mono', 'Fira Code', monospace;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+  --neon-glow-strong: rgba(0, 255, 136, 0.4);
+  --neon-glow-medium: rgba(0, 255, 136, 0.15);
+  --neon-glow-subtle: rgba(0, 255, 136, 0.08);
+  --neon-glow-faint: rgba(0, 255, 136, 0.02);
+}
+
+/* Neon: push sidebar to the right */
+[data-theme="neon"] .app-main {
+  flex-direction: row-reverse;
+}
+
+[data-theme="neon"] .sidebar {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+
+/* Neon: glowing brand */
+[data-theme="neon"] .sidebar-brand h1 {
+  color: var(--accent);
+  text-shadow: 0 0 20px var(--neon-glow-strong);
+}
+
+[data-theme="neon"] .sidebar-brand svg {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 6px var(--neon-glow-strong));
+}
+
+/* Neon: active indicator on right edge */
+[data-theme="neon"] .workstream-item.active {
+  border-left: none;
+  border-right: 3px solid var(--accent);
+  box-shadow: inset -4px 0 12px var(--neon-glow-subtle);
+}
+
+/* Neon: glowing rank numbers */
+[data-theme="neon"] .ws-rank {
+  font-family: var(--font-mono);
+  text-shadow: 0 0 8px var(--neon-glow-strong);
+}
+
+/* Neon: detail tabs */
+[data-theme="neon"] .detail-tabs {
+  border-bottom-color: var(--border);
+}
+
+[data-theme="neon"] .detail-tab.active {
+  text-shadow: 0 0 10px var(--neon-glow-strong);
+}
+
+/* Neon: sidebar controls with cyberpunk styling */
+[data-theme="neon"] .sidebar-control {
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+}
+
+[data-theme="neon"] .sidebar-control:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--neon-glow-medium);
+}
+
+/* Neon: glowing modal */
+[data-theme="neon"] .modal {
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  box-shadow: 0 0 40px var(--neon-glow-subtle);
+}
+
+/* Neon: message bubbles with subtle border */
+[data-theme="neon"] .message-bubble {
+  border: 1px solid var(--neon-glow-subtle);
+}
+
+/* Neon: scanline overlay effect */
+[data-theme="neon"] .app-shell::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9998;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    var(--neon-glow-faint) 2px,
+    var(--neon-glow-faint) 4px
+  );
+  opacity: 1;
+}
+
+/* Neon: detail header glow line */
+[data-theme="neon"] .detail-header-shell {
+  border-bottom: 1px solid var(--neon-glow-medium);
+}
+
+
+/* ==========================================================================
+   THEME 3: EMBER
+   Concept: Warm earth tones. Wider sidebar. Softer, more rounded corners.
+   Cozy studio feel with generous spacing and pill-shaped controls.
+   ========================================================================== */
+
+:root[data-theme="ember"] {
+  --bg-deep: #110e0a;
+  --bg-surface: #1a1510;
+  --bg-raised: #221c14;
+  --bg-hover: #2a231a;
+  --bg-active: #332b20;
+  --border: #3a3024;
+  --border-subtle: #2a2218;
+  --text-primary: #e8ddd0;
+  --text-secondary: #a89880;
+  --text-tertiary: #6b5e4e;
+  --accent: #d4915c;
+  --accent-dim: #a06b3e;
+  --accent-glow: rgba(212, 145, 92, 0.1);
+  --user-bg: #1e1812;
+  --assistant-bg: #14110d;
+  --success: #7eb563;
+  --error: #c45454;
+  --info: #7eb5d4;
+  --code-bg: #0e0c08;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+}
+
+/* Ember: wider sidebar for breathing room */
+[data-theme="ember"] .sidebar {
+  width: 300px;
+}
+
+[data-theme="ember"] .sidebar-header {
+  padding: 24px 20px 16px;
+}
+
+/* Ember: softer brand typography */
+[data-theme="ember"] .sidebar-brand h1 {
+  font-family: var(--font-sans);
+  text-transform: none;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: 0.02em;
+}
+
+[data-theme="ember"] .sidebar-brand svg {
+  stroke: var(--accent);
+}
+
+/* Ember: card-style workstream items with rounded corners */
+[data-theme="ember"] .workstream-item {
+  padding: 14px 16px;
+  gap: 12px;
+  border-radius: var(--radius-sm);
+  margin: 2px 8px;
+  border-bottom: none;
+}
+
+[data-theme="ember"] .workstream-item:hover {
+  background: var(--bg-hover);
+}
+
+[data-theme="ember"] .workstream-item.active {
+  background: var(--bg-active);
+  border-left: none;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Ember: circular colored rank badge */
+[data-theme="ember"] .ws-rank {
+  background: var(--accent);
+  color: var(--bg-deep);
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 12px;
+}
+
+[data-theme="ember"] .ws-name {
+  font-size: 14px;
+}
+
+/* Ember: pill-shaped controls */
+[data-theme="ember"] .sidebar-control {
+  border-radius: var(--radius-lg);
+  padding: 7px 14px;
+}
+
+[data-theme="ember"] .sidebar-control-primary {
+  background: var(--accent);
+  color: var(--bg-deep);
+}
+
+/* Ember: rounded create workstream form */
+[data-theme="ember"] .create-workstream {
+  padding: 16px;
+  border-radius: var(--radius-md);
+  margin: 4px 8px;
+}
+
+/* Ember: pill-shaped tabs */
+[data-theme="ember"] .detail-tabs {
+  gap: 4px;
+  padding: 8px 16px;
+}
+
+[data-theme="ember"] .detail-tab {
+  border-radius: var(--radius-lg);
+  padding: 6px 16px;
+}
+
+[data-theme="ember"] .detail-tab.active {
+  background: var(--accent-glow);
+}
+
+/* Ember: soft rounded modal with deep shadow */
+[data-theme="ember"] .modal {
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Ember: extra-rounded bubbles and inputs */
+[data-theme="ember"] .message-bubble {
+  border-radius: 16px;
+}
+
+[data-theme="ember"] .input-textarea {
+  border-radius: 16px;
+}
+
+[data-theme="ember"] .setting-card {
+  border-radius: var(--radius-md);
+}
