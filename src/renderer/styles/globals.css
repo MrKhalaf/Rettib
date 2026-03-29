@@ -42,6 +42,37 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
 }
 
+[data-theme="light"] {
+  --bg-deep: #f5f5f7;
+  --bg-surface: #ffffff;
+  --bg-raised: #f0f0f2;
+  --bg-hover: #e8e8ec;
+  --bg-active: #dcdce2;
+  --border: #d4d4d8;
+  --border-subtle: #e4e4e8;
+  --text-primary: #1a1a1e;
+  --text-secondary: #6b6b70;
+  --text-tertiary: #9a9aa0;
+  --accent: #a07820;
+  --accent-dim: #c9a04e;
+  --accent-glow: rgba(160, 120, 32, 0.1);
+  --user-bg: #eef1fa;
+  --user-border: #d0d4e8;
+  --assistant-bg: #f8f8fa;
+  --tool-bg: #f0f1f4;
+  --tool-border: #d8d9e0;
+  --tool-text: #6b7280;
+  --success: #2d8a4e;
+  --error: #c43030;
+  --info: #2a7cd6;
+  --code-bg: #f0f0f3;
+  --scrollbar: #d0d0d4;
+  --scrollbar-hover: #b8b8c0;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
 html,
 body,
 #root {
@@ -2479,4 +2510,165 @@ select:focus {
   .terminal-view {
     padding: 12px;
   }
+}
+
+/* ── Task Runner Section ────────────────────────────────────────── */
+
+.task-runner-section {
+  margin-bottom: 0;
+}
+
+.task-runner-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-runner-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.task-runner-item.expanded {
+  border-color: var(--accent-dim);
+}
+
+.task-runner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+
+.task-runner-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-tertiary);
+}
+
+.task-runner-status-dot.todo { background: var(--text-tertiary); }
+.task-runner-status-dot.in_progress { background: var(--info); }
+.task-runner-status-dot.running { background: #4ade80; animation: pulse-dot 2s ease-in-out infinite; }
+.task-runner-status-dot.done { background: var(--success); }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.task-runner-title {
+  flex: 1;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-runner-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.task-btn {
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  color: var(--text-tertiary);
+}
+
+.task-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border: none;
+}
+
+.task-btn-run {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.task-btn-stop {
+  color: var(--error);
+}
+
+.task-btn-done:hover { color: var(--success); }
+.task-btn-delete:hover { color: var(--error); }
+
+.task-runner-new {
+  margin-top: 6px;
+}
+
+.task-runner-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #111114;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.task-runner-input:focus {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.task-runner-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* ── Task Terminal Pane ─────────────────────────────────────────── */
+
+.task-terminal-pane {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: #0f1116;
+}
+
+.task-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: #131722;
+}
+
+.task-terminal-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.task-terminal-status.active {
+  color: #7fcf9f;
+}
+
+.task-terminal-surface {
+  height: 300px;
+  min-height: 200px;
+}
+
+.task-terminal-surface .xterm {
+  padding: 8px;
+}
+
+.task-terminal-error {
+  margin: 4px 10px 8px;
+  font-size: 12px;
+  color: var(--error);
 }

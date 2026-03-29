@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import type { UpdateTaskInput } from '../../shared/types'
+import type { CreateTaskInput, UpdateTaskInput } from '../../shared/types'
 import { tasksApi } from '../api/tasks'
 
 export function useTasks(workstreamId: number | null) {
@@ -16,7 +16,7 @@ export function useCreateTask(workstreamId: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (title: string) => tasksApi.create(workstreamId, title),
+    mutationFn: (title: string) => tasksApi.create({ workstream_id: workstreamId, title }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['tasks', workstreamId] })
       void queryClient.invalidateQueries({ queryKey: ['workstream', workstreamId] })

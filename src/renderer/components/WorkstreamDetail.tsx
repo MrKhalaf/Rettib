@@ -18,6 +18,7 @@ import type {
   WorkstreamContextDoc,
   WorkstreamStatus
 } from '../../shared/types'
+import { TaskRunnerSection } from './TaskRunnerSection'
 import { appApi } from '../api/app'
 import { chatApi } from '../api/chat'
 import {
@@ -47,6 +48,7 @@ const DEFAULT_CHAT_SESSION_COMMAND_MODE: ChatSessionCommandMode = 'claude'
 const DEFAULT_CHAT_SESSION_VIEW_MODE: ChatSessionViewMode = 'chat'
 const DEFAULT_TERMINAL_SESSION_STATE: TerminalSessionState = {
   is_active: false,
+  task_id: null,
   conversation_uuid: null,
   workstream_id: null,
   cwd: null,
@@ -2527,6 +2529,7 @@ export function WorkstreamDetail({ workstreamId }: Props) {
 
     const payload = {
       workstream_id: workstreamId,
+      task_id: 0,
       conversation_uuid: activeTab.resumeSessionId,
       cwd: detail?.workstream.chat_run_directory ?? chatProjectCwd ?? null,
       command_mode: activeCommandMode
@@ -2976,6 +2979,8 @@ export function WorkstreamDetail({ workstreamId }: Props) {
                 </button>
               </div>
             </section>
+
+            {workstreamId !== null && <TaskRunnerSection workstreamId={workstreamId} />}
 
             <section className="info-section">
               <div className="info-section-header">Settings</div>
