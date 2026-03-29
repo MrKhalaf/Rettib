@@ -21,7 +21,13 @@ import { buildChildPathEnv, resolveClaudeExecutableOrThrow } from './claude-cli-
 
 export const TERMINAL_EVENT_CHANNEL = 'chat:terminal-event'
 
+const WRITE_BATCH_SIZE = 16_384
+const RESIZE_DEBOUNCE_MS = 60
+
+// ── Types ──────────────────────────────────────────────────────────
+
 interface StartTerminalSessionParams {
+  taskId: number
   workstreamId: number
   conversationUuid: string | null
   cwd: string
@@ -30,6 +36,7 @@ interface StartTerminalSessionParams {
 
 interface ActiveTerminalSession {
   ptyProcess: pty.IPty
+  taskId: number
   conversationUuid: string
   workstreamId: number
   cwd: string
@@ -38,8 +45,18 @@ interface ActiveTerminalSession {
   stopRequested: boolean
 }
 
-let activeSession: ActiveTerminalSession | null = null
+// ── Module state ───────────────────────────────────────────────────
+
+const sessions = new Map<number, ActiveTerminalSession>()
+let attachedTaskId: number | null = null
+const scrollPositions = new Map<number, number>()
+const outputBuffers = new Map<number, string>()
+
+const resizeTimers = new Map<number, ReturnType<typeof setTimeout>>()
+
 const requireModule = createRequire(import.meta.url)
+
+// ── Helpers ────────────────────────────────────────────────────────
 
 function nowMs(): number {
   return Date.now()
@@ -81,14 +98,15 @@ function ensureNodePtySpawnHelperExecutable(): void {
       fs.chmodSync(candidatePath, stat.mode | 0o755)
     }
   } catch {
-    // Best-effort hardening only; spawn error handling below surfaces issues to the UI.
+    // Best-effort hardening only
   }
 }
 
-function buildState(): TerminalSessionState {
-  if (!activeSession) {
+function buildSessionState(session: ActiveTerminalSession | undefined): TerminalSessionState {
+  if (!session) {
     return {
       is_active: false,
+      task_id: null,
       conversation_uuid: null,
       workstream_id: null,
       cwd: null,
@@ -99,11 +117,12 @@ function buildState(): TerminalSessionState {
 
   return {
     is_active: true,
-    conversation_uuid: activeSession.conversationUuid,
-    workstream_id: activeSession.workstreamId,
-    cwd: activeSession.cwd,
-    command_mode: activeSession.commandMode,
-    started_at: activeSession.startedAt
+    task_id: session.taskId,
+    conversation_uuid: session.conversationUuid,
+    workstream_id: session.workstreamId,
+    cwd: session.cwd,
+    command_mode: session.commandMode,
+    started_at: session.startedAt
   }
 }
 
@@ -119,6 +138,33 @@ function emit(event: Omit<TerminalEvent, 'timestamp'>): void {
     }
 
     window.webContents.send(TERMINAL_EVENT_CHANNEL, payload)
+  }
+}
+
+function appendToBuffer(taskId: number, data: string): void {
+  const existing = outputBuffers.get(taskId) ?? ''
+  outputBuffers.set(taskId, existing + data)
+}
+
+function drainBuffer(taskId: number): void {
+  const buffer = outputBuffers.get(taskId)
+  if (!buffer || buffer.length === 0) return
+
+  const slice = buffer.slice(0, WRITE_BATCH_SIZE)
+  const remaining = buffer.slice(WRITE_BATCH_SIZE)
+  outputBuffers.set(taskId, remaining)
+
+  const session = sessions.get(taskId)
+  emit({
+    type: 'output',
+    task_id: taskId,
+    conversation_uuid: session?.conversationUuid ?? null,
+    workstream_id: session?.workstreamId ?? null,
+    output: slice
+  })
+
+  if (remaining.length > 0) {
+    setImmediate(() => drainBuffer(taskId))
   }
 }
 
@@ -157,29 +203,18 @@ function buildClaudeArgs(
   return args
 }
 
-export function getTerminalSessionState(): TerminalSessionState {
-  return buildState()
-}
+// ── New multi-session API (per-task) ───────────────────────────────
 
-export function isTerminalSessionActiveForConversation(conversationUuid: string | null | undefined): boolean {
-  const normalized = conversationUuid?.trim() ?? ''
-  if (!normalized || !activeSession) {
-    return false
-  }
-
-  return activeSession.conversationUuid === normalized
-}
-
-export function startTerminalSession(params: StartTerminalSessionParams): TerminalSessionState {
+export function startTaskTerminalSession(params: StartTerminalSessionParams): TerminalSessionState {
   const normalizedConversationUuid = params.conversationUuid?.trim() || null
+  const existing = sessions.get(params.taskId)
 
-  if (activeSession) {
-    if (normalizedConversationUuid && activeSession.conversationUuid === normalizedConversationUuid) {
-      return buildState()
+  if (existing) {
+    if (normalizedConversationUuid && existing.conversationUuid === normalizedConversationUuid) {
+      return buildSessionState(existing)
     }
-
     throw new Error(
-      `Another terminal session is already active for ${activeSession.conversationUuid}. Stop it before starting a new one.`
+      `Task ${params.taskId} already has an active terminal session. Stop it before starting a new one.`
     )
   }
 
@@ -208,8 +243,9 @@ export function startTerminalSession(params: StartTerminalSessionParams): Termin
     )
   }
 
-  activeSession = {
+  const session: ActiveTerminalSession = {
     ptyProcess,
+    taskId: params.taskId,
     conversationUuid,
     workstreamId: params.workstreamId,
     cwd: params.cwd,
@@ -218,16 +254,21 @@ export function startTerminalSession(params: StartTerminalSessionParams): Termin
     stopRequested: false
   }
 
+  sessions.set(params.taskId, session)
+  outputBuffers.set(params.taskId, '')
+
   emit({
     type: 'started',
+    task_id: params.taskId,
     conversation_uuid: conversationUuid,
     workstream_id: params.workstreamId,
-    state: buildState()
+    state: buildSessionState(session)
   })
 
   void syncConversationReference(conversationUuid, params.workstreamId, params.cwd).catch((error) => {
     emit({
       type: 'error',
+      task_id: params.taskId,
       conversation_uuid: conversationUuid,
       workstream_id: params.workstreamId,
       message: error instanceof Error ? error.message : 'Failed to sync terminal session metadata'
@@ -235,74 +276,192 @@ export function startTerminalSession(params: StartTerminalSessionParams): Termin
   })
 
   ptyProcess.onData((output) => {
-    emit({
-      type: 'output',
-      conversation_uuid: conversationUuid,
-      workstream_id: params.workstreamId,
-      output
-    })
+    if (attachedTaskId === params.taskId) {
+      emit({
+        type: 'output',
+        task_id: params.taskId,
+        conversation_uuid: conversationUuid,
+        workstream_id: params.workstreamId,
+        output
+      })
+    } else {
+      appendToBuffer(params.taskId, output)
+    }
   })
 
   ptyProcess.onExit(({ exitCode, signal }) => {
-    const previous = activeSession
-    if (!previous || previous.ptyProcess !== ptyProcess) {
-      return
-    }
+    const current = sessions.get(params.taskId)
+    if (!current || current.ptyProcess !== ptyProcess) return
 
-    const stopRequested = previous.stopRequested
-    activeSession = null
+    const stopRequested = current.stopRequested
+    sessions.delete(params.taskId)
+
+    if (attachedTaskId === params.taskId) {
+      attachedTaskId = null
+    }
 
     emit({
       type: stopRequested ? 'stopped' : 'exit',
-      conversation_uuid: previous.conversationUuid,
-      workstream_id: previous.workstreamId,
+      task_id: params.taskId,
+      conversation_uuid: current.conversationUuid,
+      workstream_id: current.workstreamId,
       exit_code: exitCode,
       signal,
-      state: buildState()
+      state: buildSessionState(undefined)
     })
 
-    void syncConversationReference(previous.conversationUuid, previous.workstreamId, previous.cwd).catch((error) => {
+    void syncConversationReference(current.conversationUuid, current.workstreamId, current.cwd).catch((error) => {
       emit({
         type: 'error',
-        conversation_uuid: previous.conversationUuid,
-        workstream_id: previous.workstreamId,
+        task_id: params.taskId,
+        conversation_uuid: current.conversationUuid,
+        workstream_id: current.workstreamId,
         message: error instanceof Error ? error.message : 'Failed to sync terminal session metadata'
       })
     })
   })
 
-  return buildState()
+  return buildSessionState(session)
+}
+
+export function stopTaskTerminalSession(taskId: number): void {
+  const session = sessions.get(taskId)
+  if (!session) return
+
+  session.stopRequested = true
+  session.ptyProcess.kill()
+}
+
+export function attachSession(taskId: number): { output: string } | null {
+  const session = sessions.get(taskId)
+  if (!session) return null
+
+  attachedTaskId = taskId
+
+  const buffered = outputBuffers.get(taskId) ?? ''
+  outputBuffers.set(taskId, '')
+
+  return { output: buffered }
+}
+
+export function detachSession(taskId: number, scrollOffset: number): void {
+  scrollPositions.set(taskId, scrollOffset)
+
+  if (attachedTaskId === taskId) {
+    attachedTaskId = null
+  }
+}
+
+export function sendTaskTerminalInput(taskId: number, data: string): void {
+  const session = sessions.get(taskId)
+  if (!session) {
+    throw new Error(`No active terminal session for task ${taskId}`)
+  }
+
+  session.ptyProcess.write(data)
+}
+
+export function resizeTaskTerminal(taskId: number, cols: number, rows: number): void {
+  const existing = resizeTimers.get(taskId)
+  if (existing) clearTimeout(existing)
+
+  resizeTimers.set(taskId, setTimeout(() => {
+    const session = sessions.get(taskId)
+    if (!session) return
+
+    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return
+
+    const safeCols = Math.max(20, Math.floor(cols))
+    const safeRows = Math.max(6, Math.floor(rows))
+    session.ptyProcess.resize(safeCols, safeRows)
+    resizeTimers.delete(taskId)
+  }, RESIZE_DEBOUNCE_MS))
+}
+
+export function saveScrollPosition(taskId: number, offset: number): void {
+  scrollPositions.set(taskId, offset)
+}
+
+export function getScrollPosition(taskId: number): number {
+  return scrollPositions.get(taskId) ?? -1
+}
+
+export function getActiveSessions(): TerminalSessionState[] {
+  return Array.from(sessions.values()).map(buildSessionState)
+}
+
+export function getTaskTerminalSessionState(taskId: number): TerminalSessionState {
+  return buildSessionState(sessions.get(taskId))
+}
+
+export function stopAllSessions(): void {
+  for (const [, session] of sessions) {
+    session.stopRequested = true
+    session.ptyProcess.kill()
+  }
+}
+
+// ── Legacy single-session API (backward compat for existing chat handlers) ──
+
+export function getTerminalSessionState(): TerminalSessionState {
+  // Return first active session or empty state
+  const first = sessions.values().next().value as ActiveTerminalSession | undefined
+  return buildSessionState(first)
+}
+
+export function isTerminalSessionActiveForConversation(conversationUuid: string | null | undefined): boolean {
+  const normalized = conversationUuid?.trim() ?? ''
+  if (!normalized) return false
+
+  for (const session of sessions.values()) {
+    if (session.conversationUuid === normalized) return true
+  }
+
+  return false
+}
+
+export function startTerminalSession(params: {
+  workstreamId: number
+  conversationUuid: string | null
+  cwd: string
+  commandMode: ChatSessionCommandMode
+}): TerminalSessionState {
+  // Legacy: use workstreamId as a pseudo-taskId (negative to avoid collision)
+  const pseudoTaskId = -(params.workstreamId)
+  return startTaskTerminalSession({
+    taskId: pseudoTaskId,
+    workstreamId: params.workstreamId,
+    conversationUuid: params.conversationUuid,
+    cwd: params.cwd,
+    commandMode: params.commandMode
+  })
 }
 
 export function stopTerminalSession(): TerminalSessionState {
-  if (!activeSession) {
-    return buildState()
+  // Legacy: stop first session
+  const first = sessions.values().next().value as ActiveTerminalSession | undefined
+  if (first) {
+    first.stopRequested = true
+    first.ptyProcess.kill()
   }
-
-  const current = activeSession
-  current.stopRequested = true
-  current.ptyProcess.kill()
-  return buildState()
+  return buildSessionState(undefined)
 }
 
 export function sendTerminalInput(data: string): void {
-  if (!activeSession) {
-    throw new Error('No active terminal session')
-  }
-
-  activeSession.ptyProcess.write(data)
+  // Legacy: send to first session
+  const first = sessions.values().next().value as ActiveTerminalSession | undefined
+  if (!first) throw new Error('No active terminal session')
+  first.ptyProcess.write(data)
 }
 
 export function resizeTerminal(cols: number, rows: number): void {
-  if (!activeSession) {
-    return
-  }
+  // Legacy: resize first session
+  const first = sessions.values().next().value as ActiveTerminalSession | undefined
+  if (!first) return
 
-  if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
-    return
-  }
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) return
 
   const safeCols = Math.max(20, Math.floor(cols))
   const safeRows = Math.max(6, Math.floor(rows))
-  activeSession.ptyProcess.resize(safeCols, safeRows)
+  first.ptyProcess.resize(safeCols, safeRows)
 }
