@@ -1,62 +1,29 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import type { CreateWorkstreamInput } from '../shared/types'
-import { Dashboard } from './components/Dashboard'
-import { QuickCapture } from './components/QuickCapture'
+import type { Task } from '../shared/types'
+import { tasksApi } from './api/tasks'
+import { ProjectSidebar } from './components/ProjectSidebar'
+import { TaskTerminalView } from './components/TaskTerminalView'
 import type { Theme } from './components/ThemeToggle'
-import { ThemeToggle } from './components/ThemeToggle'
-import { WorkstreamDetail } from './components/WorkstreamDetail'
-import { useLogProgress } from './hooks/useProgress'
-import { useCreateWorkstream, useWorkstreams } from './hooks/useWorkstreams'
+import { useWorkstreams } from './hooks/useWorkstreams'
 
 export default function App() {
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
   const [selectedWorkstreamId, setSelectedWorkstreamId] = useState<number | null>(null)
-  const [showArchived, setShowArchived] = useState(false)
-  const [quickCaptureOpen, setQuickCaptureOpen] = useState(false)
-  const [theme, setTheme] = useState<Theme>('original')
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+  const [theme, setTheme] = useState<Theme>('dark')
 
   const workstreamsQuery = useWorkstreams()
-  const createWorkstreamMutation = useCreateWorkstream()
-  const logProgressMutation = useLogProgress()
-
   const workstreams = useMemo(() => workstreamsQuery.data ?? [], [workstreamsQuery.data])
-  const archivedCount = useMemo(() => workstreams.filter((workstream) => workstream.status === 'done').length, [workstreams])
-  const visibleWorkstreams = useMemo(
-    () => (showArchived ? workstreams : workstreams.filter((workstream) => workstream.status !== 'done')),
-    [workstreams, showArchived]
+
+  const selectedProjectName = useMemo(
+    () => workstreams.find((w) => w.id === selectedWorkstreamId)?.name ?? null,
+    [workstreams, selectedWorkstreamId]
   )
-  const workstreamsError =
-    workstreamsQuery.error instanceof Error ? workstreamsQuery.error.message : workstreamsQuery.error ? 'Failed to load workstreams' : null
 
+  // Apply theme
   useEffect(() => {
-    if (visibleWorkstreams.length === 0) {
-      if (selectedWorkstreamId !== null) {
-        setSelectedWorkstreamId(null)
-      }
-      return
-    }
-
-    if (selectedWorkstreamId !== null && visibleWorkstreams.some((workstream) => workstream.id === selectedWorkstreamId)) {
-      return
-    }
-
-    setSelectedWorkstreamId(visibleWorkstreams[0].id)
-  }, [selectedWorkstreamId, visibleWorkstreams])
-
-  useEffect(() => {
-    function handleKeydown(event: KeyboardEvent): void {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault()
-        setQuickCaptureOpen(true)
-      }
-    }
-
-    window.addEventListener('keydown', handleKeydown)
-    return () => window.removeEventListener('keydown', handleKeydown)
-  }, [])
-
-  useEffect(() => {
-    if (theme === 'original') {
+    if (theme === 'dark') {
       document.documentElement.removeAttribute('data-theme')
     } else {
       document.documentElement.setAttribute('data-theme', theme)
@@ -66,43 +33,46 @@ export default function App() {
     }
   }, [theme])
 
-  async function handleCreateWorkstream(payload: CreateWorkstreamInput) {
-    const created = await createWorkstreamMutation.mutateAsync(payload)
-    setSelectedWorkstreamId(created.id)
-  }
+  // Fetch task details when selection changes
+  useEffect(() => {
+    if (selectedTaskId === null) {
+      setSelectedTask(null)
+      return
+    }
 
-  async function handleQuickCapture(workstreamId: number, note: string) {
-    await logProgressMutation.mutateAsync({ workstreamId, note })
+    // Fetch from the tasks list for the workstream
+    if (selectedWorkstreamId !== null) {
+      tasksApi.list(selectedWorkstreamId).then((tasks) => {
+        const found = tasks.find((t) => t.id === selectedTaskId) ?? null
+        setSelectedTask(found)
+      }).catch(() => {
+        setSelectedTask(null)
+      })
+    }
+  }, [selectedTaskId, selectedWorkstreamId])
+
+  const handleSelectTask = useCallback((taskId: number, workstreamId: number) => {
+    setSelectedTaskId(taskId)
     setSelectedWorkstreamId(workstreamId)
-  }
+  }, [])
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
+  }, [])
 
   return (
     <div className="app-shell">
-      <main className="app-main">
-        <Dashboard
-          workstreams={visibleWorkstreams}
-          archivedCount={archivedCount}
-          showArchived={showArchived}
-          isLoading={workstreamsQuery.isLoading}
-          errorMessage={workstreamsError}
-          selectedWorkstreamId={selectedWorkstreamId}
-          onSelectWorkstream={setSelectedWorkstreamId}
-          onCreateWorkstream={handleCreateWorkstream}
-          onOpenQuickCapture={() => setQuickCaptureOpen(true)}
-          onToggleShowArchived={() => setShowArchived((current) => !current)}
-        />
-        <WorkstreamDetail workstreamId={selectedWorkstreamId} />
-      </main>
-
-      <QuickCapture
-        open={quickCaptureOpen}
-        workstreams={visibleWorkstreams}
-        isSubmitting={logProgressMutation.isPending}
-        onClose={() => setQuickCaptureOpen(false)}
-        onSubmit={handleQuickCapture}
+      <ProjectSidebar
+        selectedTaskId={selectedTaskId}
+        onSelectTask={handleSelectTask}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
-
-      <ThemeToggle theme={theme} onChange={setTheme} />
+      <TaskTerminalView
+        task={selectedTask}
+        workstreamId={selectedWorkstreamId}
+        projectName={selectedProjectName}
+      />
     </div>
   )
 }
