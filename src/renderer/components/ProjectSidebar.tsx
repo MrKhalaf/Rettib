@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import type { TerminalSessionState } from '../../shared/types'
 import { terminalApi } from '../api/terminal'
-import { useWorkstreams } from '../hooks/useWorkstreams'
+import { useCreateWorkstream, useWorkstreams } from '../hooks/useWorkstreams'
 import { ProjectFolder } from './ProjectFolder'
 import type { Theme } from './ThemeToggle'
 import { ThemeToggle } from './ThemeToggle'
@@ -16,6 +16,7 @@ interface Props {
 
 export function ProjectSidebar({ selectedTaskId, onSelectTask, theme, onToggleTheme }: Props) {
   const workstreamsQuery = useWorkstreams()
+  const createWorkstream = useCreateWorkstream()
   const [showArchived, setShowArchived] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   const [activeSessions, setActiveSessions] = useState<TerminalSessionState[]>([])
@@ -67,6 +68,14 @@ export function ProjectSidebar({ selectedTaskId, onSelectTask, theme, onToggleTh
       </header>
 
       <div className="project-list">
+        <button
+          type="button"
+          className="new-project-btn"
+          onClick={() => createWorkstream.mutate({ name: 'New Project', priority: 3, target_cadence_days: 7 })}
+        >
+          + New Project
+        </button>
+
         {workstreamsQuery.isLoading && <p className="sidebar-loading">Loading...</p>}
 
         {visible.map((workstream) => (
