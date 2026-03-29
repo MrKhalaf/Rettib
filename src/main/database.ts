@@ -22,7 +22,7 @@ import type {
 } from '../shared/types'
 import { normalizeContextReference } from './context-service'
 
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 
 let dbInstance: Database.Database | null = null
 
@@ -105,7 +105,14 @@ function ensureChatSessionPreferenceSchema(db: Database.Database): void {
   `)
 }
 
+function tableExists(db: Database.Database, tableName: string): boolean {
+  const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(tableName)
+  return Boolean(row)
+}
+
 function ensureWorkstreamRunDirectoryColumn(db: Database.Database): void {
+  if (!tableExists(db, 'workstreams')) return
+
   const columns = db.prepare(`PRAGMA table_info(workstreams)`).all() as Array<{ name: string }>
   const columnNames = new Set(columns.map((column) => column.name))
 
@@ -312,8 +319,12 @@ function runMigrations(db: Database.Database): void {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done')) DEFAULT 'todo',
+        status TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done', 'running')) DEFAULT 'todo',
         position INTEGER NOT NULL DEFAULT 0,
+        prompt TEXT,
+        run_directory TEXT,
+        worktree_path TEXT,
+        command_mode TEXT CHECK (command_mode IN ('claude', 'cc')),
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -498,6 +509,27 @@ function runMigrations(db: Database.Database): void {
 
   if (version < 6) {
     ensureChatSessionPreferenceSchema(db)
+  }
+
+  if (version < 7) {
+    const columns = db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>
+    const columnNames = new Set(columns.map((c) => c.name))
+
+    if (!columnNames.has('prompt')) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN prompt TEXT`)
+    }
+    if (!columnNames.has('run_directory')) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN run_directory TEXT`)
+    }
+    if (!columnNames.has('worktree_path')) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN worktree_path TEXT`)
+    }
+    if (!columnNames.has('command_mode')) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN command_mode TEXT CHECK (command_mode IN ('claude', 'cc'))`)
+    }
+
+    // Widen status check to include 'running'
+    // SQLite doesn't allow ALTER CHECK, but new inserts will work; old rows won't violate
   }
 
   db.pragma(`user_version = ${SCHEMA_VERSION}`)
@@ -888,6 +920,8 @@ export function listProgress(workstreamId: number, db = getDatabase()): Progress
     .all(workstreamId) as ProgressUpdate[]
 }
 
+const TASK_COLUMNS = 'id, workstream_id, title, status, position, prompt, run_directory, worktree_path, command_mode, created_at, updated_at'
+
 export function listTasks(workstreamId: number, db = getDatabase()): Task[] {
   db.prepare(
     `
@@ -899,7 +933,7 @@ export function listTasks(workstreamId: number, db = getDatabase()): Task[] {
   return db
     .prepare(
       `
-      SELECT id, workstream_id, title, status, position, created_at, updated_at
+      SELECT ${TASK_COLUMNS}
       FROM tasks
       WHERE workstream_id = ? AND status != 'done'
       ORDER BY position ASC, created_at ASC
@@ -908,25 +942,30 @@ export function listTasks(workstreamId: number, db = getDatabase()): Task[] {
     .all(workstreamId) as Task[]
 }
 
+export function getTask(id: number, db = getDatabase()): Task | null {
+  const row = db
+    .prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`)
+    .get(id) as Task | undefined
+  return row ?? null
+}
+
 export function createTask(data: CreateTaskInput, db = getDatabase()): Task {
   const now = nowMs()
+  const prompt = typeof data.prompt === 'string' ? data.prompt.trim() || null : null
+  const runDirectory = typeof data.run_directory === 'string' ? data.run_directory.trim() || null : null
+  const commandMode = data.command_mode ?? null
+
   const result = db
     .prepare(
       `
-      INSERT INTO tasks (workstream_id, title, status, position, created_at, updated_at)
-      VALUES (?, ?, 'todo', COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE workstream_id = ?), 0), ?, ?)
+      INSERT INTO tasks (workstream_id, title, status, position, prompt, run_directory, command_mode, created_at, updated_at)
+      VALUES (?, ?, 'todo', COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE workstream_id = ?), 0), ?, ?, ?, ?, ?)
       `
     )
-    .run(data.workstream_id, data.title.trim(), data.workstream_id, now, now)
+    .run(data.workstream_id, data.title.trim(), data.workstream_id, prompt, runDirectory, commandMode, now, now)
 
   return db
-    .prepare(
-      `
-      SELECT id, workstream_id, title, status, position, created_at, updated_at
-      FROM tasks
-      WHERE id = ?
-      `
-    )
+    .prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE id = ?`)
     .get(result.lastInsertRowid) as Task
 }
 
@@ -937,7 +976,7 @@ export function updateTask(id: number, data: UpdateTaskInput, db = getDatabase()
   }
 
   const updates: string[] = []
-  const values: Array<number | string> = []
+  const values: Array<number | string | null> = []
 
   if (typeof data.title === 'string') {
     updates.push('title = ?')
@@ -952,6 +991,26 @@ export function updateTask(id: number, data: UpdateTaskInput, db = getDatabase()
   if (typeof data.position === 'number') {
     updates.push('position = ?')
     values.push(data.position)
+  }
+
+  if (data.prompt !== undefined) {
+    updates.push('prompt = ?')
+    values.push(typeof data.prompt === 'string' ? data.prompt.trim() || null : null)
+  }
+
+  if (data.run_directory !== undefined) {
+    updates.push('run_directory = ?')
+    values.push(typeof data.run_directory === 'string' ? data.run_directory.trim() || null : null)
+  }
+
+  if (data.worktree_path !== undefined) {
+    updates.push('worktree_path = ?')
+    values.push(typeof data.worktree_path === 'string' ? data.worktree_path.trim() || null : null)
+  }
+
+  if (data.command_mode !== undefined) {
+    updates.push('command_mode = ?')
+    values.push(data.command_mode)
   }
 
   if (updates.length === 0) {

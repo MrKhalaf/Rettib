@@ -1,5 +1,5 @@
 export type WorkstreamStatus = 'active' | 'blocked' | 'waiting' | 'done'
-export type TaskStatus = 'todo' | 'in_progress' | 'done'
+export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'running'
 export type SyncSourceType = 'claude_cli' | 'claude_desktop'
 export type SyncRunStatus = 'running' | 'success' | 'failed'
 
@@ -43,6 +43,10 @@ export interface Task {
   title: string
   status: TaskStatus
   position: number
+  prompt: string | null
+  run_directory: string | null
+  worktree_path: string | null
+  command_mode: ChatSessionCommandMode | null
   created_at: number
   updated_at: number
 }
@@ -50,12 +54,19 @@ export interface Task {
 export interface CreateTaskInput {
   workstream_id: number
   title: string
+  prompt?: string | null
+  run_directory?: string | null
+  command_mode?: ChatSessionCommandMode | null
 }
 
 export interface UpdateTaskInput {
   title?: string
   status?: TaskStatus
   position?: number
+  prompt?: string | null
+  run_directory?: string | null
+  worktree_path?: string | null
+  command_mode?: ChatSessionCommandMode | null
 }
 
 export interface ProgressUpdate {
@@ -171,6 +182,7 @@ export interface ChatSessionPreference {
 
 export interface StartTerminalSessionInput {
   workstream_id: number
+  task_id: number
   conversation_uuid?: string | null
   cwd?: string | null
   command_mode?: ChatSessionCommandMode | null
@@ -178,6 +190,7 @@ export interface StartTerminalSessionInput {
 
 export interface TerminalSessionState {
   is_active: boolean
+  task_id: number | null
   conversation_uuid: string | null
   workstream_id: number | null
   cwd: string | null
@@ -190,6 +203,7 @@ export type TerminalEventType = 'started' | 'output' | 'exit' | 'stopped' | 'err
 export interface TerminalEvent {
   type: TerminalEventType
   timestamp: number
+  task_id: number | null
   conversation_uuid: string | null
   workstream_id: number | null
   output?: string
@@ -284,9 +298,20 @@ export interface ElectronApi {
   }
   tasks: {
     list: (workstreamId: number) => Promise<Task[]>
-    create: (workstreamId: number, title: string) => Promise<Task>
+    create: (data: CreateTaskInput) => Promise<Task>
     update: (id: number, data: UpdateTaskInput) => Promise<void>
     delete: (id: number) => Promise<void>
+  }
+  terminal: {
+    start: (input: StartTerminalSessionInput) => Promise<TerminalSessionState>
+    stop: (taskId: number) => Promise<void>
+    attach: (taskId: number) => Promise<{ output: string } | null>
+    detach: (taskId: number, scrollOffset: number) => Promise<void>
+    input: (taskId: number, data: string) => Promise<void>
+    resize: (taskId: number, cols: number, rows: number) => Promise<void>
+    sessions: () => Promise<TerminalSessionState[]>
+    saveScroll: (taskId: number, offset: number) => Promise<void>
+    onEvent: (listener: (event: TerminalEvent) => void) => () => void
   }
   chat: {
     listConversations: () => Promise<ClaudeConversation[]>
