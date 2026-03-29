@@ -15,9 +15,28 @@ const api: ElectronApi = {
   },
   tasks: {
     list: (workstreamId) => ipcRenderer.invoke('tasks:list', workstreamId),
-    create: (workstreamId, title) => ipcRenderer.invoke('tasks:create', workstreamId, title),
+    create: (data) => ipcRenderer.invoke('tasks:create', data),
     update: (id, data) => ipcRenderer.invoke('tasks:update', id, data),
     delete: (id) => ipcRenderer.invoke('tasks:delete', id)
+  },
+  terminal: {
+    start: (input) => ipcRenderer.invoke('terminal:start', input),
+    stop: (taskId) => ipcRenderer.invoke('terminal:stop', taskId),
+    attach: (taskId) => ipcRenderer.invoke('terminal:attach', taskId),
+    detach: (taskId, scrollOffset) => ipcRenderer.invoke('terminal:detach', taskId, scrollOffset),
+    input: (taskId, data) => ipcRenderer.invoke('terminal:input', taskId, data),
+    resize: (taskId, cols, rows) => ipcRenderer.invoke('terminal:resize', taskId, cols, rows),
+    sessions: () => ipcRenderer.invoke('terminal:sessions'),
+    saveScroll: (taskId, offset) => ipcRenderer.invoke('terminal:save-scroll', taskId, offset),
+    onEvent: (listener) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        listener(payload as Parameters<typeof listener>[0])
+      }
+      ipcRenderer.on('chat:terminal-event', handler)
+      return () => {
+        ipcRenderer.removeListener('chat:terminal-event', handler)
+      }
+    }
   },
   chat: {
     listConversations: () => ipcRenderer.invoke('chat:list-conversations'),

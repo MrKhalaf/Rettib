@@ -32,6 +32,7 @@ import {
   createTask,
   createWorkstream,
   deleteTask,
+  getTask,
   getDatabase,
   getChatSessionPreference,
   getSessionContextFingerprint,
@@ -65,7 +66,15 @@ import {
   resizeTerminal,
   sendTerminalInput,
   startTerminalSession,
-  stopTerminalSession
+  stopTerminalSession,
+  startTaskTerminalSession,
+  stopTaskTerminalSession,
+  attachSession,
+  detachSession,
+  sendTaskTerminalInput,
+  resizeTaskTerminal,
+  saveScrollPosition,
+  getActiveSessions
 } from './terminal-session-manager'
 
 function ensureNumber(value: unknown, name: string): number {
@@ -577,10 +586,17 @@ export function registerIpcHandlers(): void {
     return listTasks(id, getDatabase())
   })
 
-  ipcMain.handle('tasks:create', async (_event, workstreamId: unknown, title: unknown) => {
-    const id = ensureNumber(workstreamId, 'workstream id')
-    const taskTitle = ensureString(title, 'title')
-    return createTask({ workstream_id: id, title: taskTitle }, getDatabase())
+  ipcMain.handle('tasks:create', async (_event, data: unknown) => {
+    const payload = ensureObject(data, 'task data')
+    const workstreamId = ensureNumber(payload.workstream_id, 'workstream_id')
+    const title = ensureString(payload.title, 'title')
+    return createTask({
+      workstream_id: workstreamId,
+      title,
+      prompt: typeof payload.prompt === 'string' ? payload.prompt : null,
+      run_directory: typeof payload.run_directory === 'string' ? payload.run_directory : null,
+      command_mode: payload.command_mode === 'cc' ? 'cc' : payload.command_mode === 'claude' ? 'claude' : null
+    }, getDatabase())
   })
 
   ipcMain.handle('tasks:update', async (_event, id: unknown, data: unknown) => {
@@ -985,5 +1001,67 @@ export function registerIpcHandlers(): void {
       canceled: false,
       path: result.filePaths[0]
     }
+  })
+
+  // ── Per-task terminal handlers ─────────────────────────────────
+
+  ipcMain.handle('terminal:start', async (_event, data: unknown) => {
+    const payload = ensureObject(data, 'terminal start input')
+    const taskId = ensureNumber(payload.task_id, 'task_id')
+    const workstreamId = ensureNumber(payload.workstream_id, 'workstream_id')
+
+    const db = getDatabase()
+    const task = getTask(taskId, db)
+    if (!task) throw new Error(`Task ${taskId} not found`)
+
+    const workstream = getWorkstream(db, workstreamId)
+    if (!workstream) throw new Error(`Workstream ${workstreamId} not found`)
+
+    // CWD resolution: task.run_directory > task.worktree_path > workstream.chat_run_directory > homedir
+    const cwd = resolveChatCwd(
+      task.worktree_path,
+      task.run_directory,
+      workstream.chat_run_directory,
+      os.homedir()
+    )
+
+    const commandMode: ChatSessionCommandMode = task.command_mode ??
+      (typeof payload.command_mode === 'string' && payload.command_mode === 'cc' ? 'cc' : 'claude')
+
+    return startTaskTerminalSession({
+      taskId,
+      workstreamId,
+      conversationUuid: typeof payload.conversation_uuid === 'string' ? payload.conversation_uuid : null,
+      cwd,
+      commandMode
+    })
+  })
+
+  ipcMain.handle('terminal:stop', async (_event, taskId: unknown) => {
+    stopTaskTerminalSession(ensureNumber(taskId, 'taskId'))
+  })
+
+  ipcMain.handle('terminal:attach', async (_event, taskId: unknown) => {
+    return attachSession(ensureNumber(taskId, 'taskId'))
+  })
+
+  ipcMain.handle('terminal:detach', async (_event, taskId: unknown, scrollOffset: unknown) => {
+    detachSession(ensureNumber(taskId, 'taskId'), ensureNumber(scrollOffset, 'scrollOffset'))
+  })
+
+  ipcMain.handle('terminal:input', async (_event, taskId: unknown, data: unknown) => {
+    sendTaskTerminalInput(ensureNumber(taskId, 'taskId'), ensureString(data, 'data'))
+  })
+
+  ipcMain.handle('terminal:resize', async (_event, taskId: unknown, cols: unknown, rows: unknown) => {
+    resizeTaskTerminal(ensureNumber(taskId, 'taskId'), ensureNumber(cols, 'cols'), ensureNumber(rows, 'rows'))
+  })
+
+  ipcMain.handle('terminal:sessions', async () => {
+    return getActiveSessions()
+  })
+
+  ipcMain.handle('terminal:save-scroll', async (_event, taskId: unknown, offset: unknown) => {
+    saveScrollPosition(ensureNumber(taskId, 'taskId'), ensureNumber(offset, 'offset'))
   })
 }
