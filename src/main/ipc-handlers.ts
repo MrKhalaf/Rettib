@@ -155,6 +155,34 @@ function normalizeWorkstreamRunDirectoryInput(
   return normalized
 }
 
+function normalizeTaskRunDirectoryInput(
+  rawValue: unknown,
+  fieldName: string
+): string | null | undefined {
+  if (rawValue === undefined) {
+    return undefined
+  }
+
+  if (rawValue === null) {
+    return null
+  }
+
+  if (typeof rawValue !== 'string') {
+    throw new Error(`${fieldName} must be a string, null, or undefined`)
+  }
+
+  const normalized = normalizePathInput(rawValue)
+  if (!normalized) {
+    return null
+  }
+
+  if (!isExistingDirectory(normalized)) {
+    throw new Error(`${fieldName} must reference an existing directory`)
+  }
+
+  return normalized
+}
+
 function isExistingDirectory(input: string | null | undefined): input is string {
   if (!input) {
     return false
@@ -590,11 +618,12 @@ export function registerIpcHandlers(): void {
     const payload = ensureObject(data, 'task data')
     const workstreamId = ensureNumber(payload.workstream_id, 'workstream_id')
     const title = ensureString(payload.title, 'title')
+    const normalizedRunDirectory = normalizeTaskRunDirectoryInput(payload.run_directory, 'run_directory')
     return createTask({
       workstream_id: workstreamId,
       title,
       prompt: typeof payload.prompt === 'string' ? payload.prompt : null,
-      run_directory: typeof payload.run_directory === 'string' ? payload.run_directory : null,
+      run_directory: normalizedRunDirectory ?? null,
       command_mode: payload.command_mode === 'cc' ? 'cc' : payload.command_mode === 'claude' ? 'claude' : null
     }, getDatabase())
   })
@@ -602,6 +631,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('tasks:update', async (_event, id: unknown, data: unknown) => {
     const taskId = ensureNumber(id, 'task id')
     const payload = data as UpdateTaskInput
+    const normalizedRunDirectory = normalizeTaskRunDirectoryInput(payload.run_directory, 'run_directory')
+    if (normalizedRunDirectory !== undefined) {
+      payload.run_directory = normalizedRunDirectory
+    }
     updateTask(taskId, payload, getDatabase())
   })
 
