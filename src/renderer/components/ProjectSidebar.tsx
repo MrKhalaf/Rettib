@@ -40,13 +40,39 @@ export function ProjectSidebar({ selectedTaskId, onSelectTask, theme, onToggleTh
 
   // Poll active terminal sessions
   useEffect(() => {
+    let cancelled = false
+
     function refresh() {
-      terminalApi.sessions().then(setActiveSessions).catch(() => {})
+      terminalApi.sessions().then((sessions) => {
+        if (!cancelled) {
+          setActiveSessions(sessions.filter((session) => session.is_active))
+        }
+      }).catch(() => {})
     }
 
     refresh()
-    const interval = setInterval(refresh, 5_000)
-    return () => clearInterval(interval)
+    const unsubscribe = terminalApi.onEvent((event) => {
+      const startedState = event.type === 'started' ? event.state : undefined
+
+      if (startedState?.task_id !== null && startedState?.is_active) {
+        setActiveSessions((current) => {
+          const next = current.filter((session) => session.task_id !== startedState.task_id)
+          next.push(startedState as TerminalSessionState)
+          return next
+        })
+      }
+
+      if ((event.type === 'stopped' || event.type === 'exit') && event.task_id !== null) {
+        setActiveSessions((current) => current.filter((session) => session.task_id !== event.task_id))
+      }
+    })
+
+    const interval = setInterval(refresh, 30_000)
+    return () => {
+      cancelled = true
+      unsubscribe()
+      clearInterval(interval)
+    }
   }, [])
 
   function toggleExpanded(id: number) {
