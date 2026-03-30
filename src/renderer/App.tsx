@@ -1,24 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import type { Task } from '../shared/types'
-import { tasksApi } from './api/tasks'
 import { ProjectSidebar } from './components/ProjectSidebar'
 import { TaskTerminalView } from './components/TaskTerminalView'
 import type { Theme } from './components/ThemeToggle'
+import { useTasks } from './hooks/useTasks'
 import { useWorkstreams } from './hooks/useWorkstreams'
 
 export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
   const [selectedWorkstreamId, setSelectedWorkstreamId] = useState<number | null>(null)
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [theme, setTheme] = useState<Theme>('dark')
 
   const workstreamsQuery = useWorkstreams()
   const workstreams = useMemo(() => workstreamsQuery.data ?? [], [workstreamsQuery.data])
-
-  const selectedProjectName = useMemo(
-    () => workstreams.find((w) => w.id === selectedWorkstreamId)?.name ?? null,
+  const selectedTasksQuery = useTasks(selectedWorkstreamId)
+  const selectedWorkstream = useMemo(
+    () => workstreams.find((workstream) => workstream.id === selectedWorkstreamId) ?? null,
     [workstreams, selectedWorkstreamId]
+  )
+
+  const selectedTask = useMemo(
+    () => (selectedTasksQuery.data ?? []).find((task) => task.id === selectedTaskId) ?? null,
+    [selectedTaskId, selectedTasksQuery.data]
   )
 
   // Apply theme
@@ -33,23 +36,15 @@ export default function App() {
     }
   }, [theme])
 
-  // Fetch task details when selection changes
   useEffect(() => {
-    if (selectedTaskId === null) {
-      setSelectedTask(null)
+    if (selectedTaskId === null || selectedWorkstreamId === null || selectedTasksQuery.isLoading) {
       return
     }
 
-    // Fetch from the tasks list for the workstream
-    if (selectedWorkstreamId !== null) {
-      tasksApi.list(selectedWorkstreamId).then((tasks) => {
-        const found = tasks.find((t) => t.id === selectedTaskId) ?? null
-        setSelectedTask(found)
-      }).catch(() => {
-        setSelectedTask(null)
-      })
+    if ((selectedTasksQuery.data ?? []).every((task) => task.id !== selectedTaskId)) {
+      setSelectedTaskId(null)
     }
-  }, [selectedTaskId, selectedWorkstreamId])
+  }, [selectedTaskId, selectedTasksQuery.data, selectedTasksQuery.isLoading, selectedWorkstreamId])
 
   const handleSelectTask = useCallback((taskId: number, workstreamId: number) => {
     setSelectedTaskId(taskId)
@@ -62,17 +57,21 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <ProjectSidebar
-        selectedTaskId={selectedTaskId}
-        onSelectTask={handleSelectTask}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-      />
-      <TaskTerminalView
-        task={selectedTask}
-        workstreamId={selectedWorkstreamId}
-        projectName={selectedProjectName}
-      />
+      <div className="app-main">
+        <ProjectSidebar
+          selectedTaskId={selectedTaskId}
+          onSelectTask={handleSelectTask}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+        <TaskTerminalView
+          key={selectedTask ? `task-terminal-${selectedTask.id}` : 'task-terminal-empty'}
+          task={selectedTask}
+          workstreamId={selectedWorkstreamId}
+          projectName={selectedWorkstream?.name ?? null}
+          projectRunDirectory={selectedWorkstream?.chat_run_directory ?? null}
+        />
+      </div>
     </div>
   )
 }
